@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -7,7 +7,7 @@ import {
   Text,
   View,
 } from "react-native";
-import MapLibreGL, { setAccessToken } from "@maplibre/maplibre-react-native";
+import MapView, { Marker, Region } from "react-native-maps";
 import * as Location from "expo-location";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import SearchBar from "../components/SearchBar";
@@ -20,66 +20,20 @@ import {
   type SearchResult,
 } from "../hooks/useRestaurantSearch";
 import { supabase } from "../lib/supabase";
-import { CATEGORY_CONFIG } from "../constants/categories";
-
-// Pas de token requis pour OpenFreeMap
-setAccessToken(null);
-
-const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+import { getCategoryConfig } from "../constants/categories";
 
 type Coords = { latitude: number; longitude: number };
 
-// ── Expressions de style MapLibre ─────────────────────────────────────────────
-
-// ['match', ['get', 'category'], 'french', '#2563EB', ..., '#6B7280']
-const CATEGORY_COLOR_EXPR = [
-  "match", ["get", "category"],
-  ...Object.entries(CATEGORY_CONFIG).flatMap(([k, v]) => [k, v.color]),
-  CATEGORY_CONFIG.other.color,
-];
-
-// Rayon du cercle interpolé selon popularity_score (0→5px, 70→7px, 100→9px)
-const CIRCLE_RADIUS_EXPR = [
-  "interpolate", ["linear"],
-  ["coalesce", ["get", "popularity_score"], 0],
-  0, 5,
-  70, 7,
-  100, 9,
-];
-
-// ── Conversion restaurants → GeoJSON ─────────────────────────────────────────
-
-function restaurantsToGeoJSON(restaurants: Restaurant[]) {
-  return {
-    type: "FeatureCollection" as const,
-    features: restaurants.map((r) => ({
-      type: "Feature" as const,
-      geometry: {
-        type: "Point" as const,
-        // GeoJSON : [longitude, latitude]
-        coordinates: [r.longitude, r.latitude],
-      },
-      properties: {
-        id: r.id,
-        place_id: r.place_id,
-        name: r.name,
-        category: r.category,
-        address: r.address,
-        city: r.city,
-        composite_score: r.composite_score,
-        popularity_score: r.popularity_score,
-        review_count: r.review_count,
-      },
-    })),
-  };
+// Convertit un zoomLevel MapLibre en latitudeDelta react-native-maps
+function zoomToLatDelta(zoomLevel: number): number {
+  return 360 / Math.pow(2, zoomLevel);
 }
 
 // ── Composant ─────────────────────────────────────────────────────────────────
 
 export default function MapScreen() {
   const insets = useSafeAreaInsets();
-  const mapRef = useRef<MapLibreGL.MapView>(null);
-  const cameraRef = useRef<MapLibreGL.Camera>(null);
+  const mapRef = useRef<MapView>(null);
 
   // ── GPS ─────────────────────────────────────────────────────────────────────
   const [userCoords, setUserCoords] = useState<Coords | null>(null);
@@ -132,9 +86,6 @@ export default function MapScreen() {
   const { localResults, googleResults, isLoading: isSearchLoading } =
     useRestaurantSearch(searchQuery, userCoords);
 
-  // ── GeoJSON (recalculé uniquement si restaurants change) ─────────────────────
-  const restaurantsGeoJSON = useMemo(() => restaurantsToGeoJSON(restaurants), [restaurants]);
-
   // ── Toast helper ─────────────────────────────────────────────────────────────
   const showToast = useCallback((message: string) => {
     setToastMessage(message);
@@ -146,71 +97,34 @@ export default function MapScreen() {
   }, [toastOpacity]);
 
   // ── Mise à jour bounds quand la carte se déplace ─────────────────────────────
-  const handleRegionChange = useCallback(async () => {
-    if (!mapRef.current) return;
-    try {
-      const zoom = await mapRef.current.getZoom();
-      const bounds = await mapRef.current.getVisibleBounds();
-      // bounds[0] = NE [lngMax, latMax] — bounds[1] = SW [lngMin, latMin]
-      const roundedZoom = Math.round(zoom);
-      setCurrentZoom(roundedZoom);
-      setMapBounds({
-        minLat: bounds[1][1],
-        maxLat: bounds[0][1],
-        minLng: bounds[1][0],
-        maxLng: bounds[0][0],
-        zoom: roundedZoom,
-      });
-    } catch {
-      // Carte pas encore prête
-    }
+  const handleRegionChange = useCallback((region: Region) => {
+    const zoom = Math.round(Math.log2(360 / region.latitudeDelta));
+    setCurrentZoom(zoom);
+    setMapBounds({
+      minLat: region.latitude - region.latitudeDelta / 2,
+      maxLat: region.latitude + region.latitudeDelta / 2,
+      minLng: region.longitude - region.longitudeDelta / 2,
+      maxLng: region.longitude + region.longitudeDelta / 2,
+      zoom,
+    });
   }, []);
 
-  // ── Tap sur un cluster ou un restaurant ──────────────────────────────────────
-  const handleShapePress = useCallback(async (event: { features: Array<{
-    geometry: { coordinates: number[] };
-    properties: Record<string, unknown>;
-  }> }) => {
-    const feature = event.features?.[0];
-    if (!feature) return;
-
-    if (feature.properties?.cluster === true) {
-      // Zoomer sur le cluster
-      const zoom = await mapRef.current?.getZoom();
-      cameraRef.current?.setCamera({
-        centerCoordinate: feature.geometry.coordinates as [number, number],
-        zoomLevel: Math.min((zoom ?? 13) + 2, 18),
-        animationDuration: 400,
-      });
-    } else {
-      // Afficher la preview du restaurant
-      const p = feature.properties;
-      setSelectedRestaurant({
-        id: String(p.id ?? ""),
-        place_id: String(p.place_id ?? ""),
-        name: String(p.name ?? ""),
-        category: String(p.category ?? "other"),
-        address: String(p.address ?? ""),
-        city: String(p.city ?? ""),
-        composite_score: p.composite_score != null ? Number(p.composite_score) : null,
-        popularity_score: p.popularity_score != null ? Number(p.popularity_score) : null,
-        review_count: Number(p.review_count ?? 0),
-        // GeoJSON : coordinates = [lng, lat]
-        latitude: feature.geometry.coordinates[1],
-        longitude: feature.geometry.coordinates[0],
-      });
-      setShowResults(false);
-    }
+  // ── Tap sur un marqueur restaurant ──────────────────────────────────────────
+  const handleMarkerPress = useCallback((restaurant: Restaurant) => {
+    setSelectedRestaurant(restaurant);
+    setShowResults(false);
   }, []);
 
   // ── Recentrer sur l'utilisateur ──────────────────────────────────────────────
   const handleRecenter = useCallback(() => {
     if (!userCoords) return;
-    cameraRef.current?.setCamera({
-      centerCoordinate: [userCoords.longitude, userCoords.latitude],
-      zoomLevel: 14,
-      animationDuration: 500,
-    });
+    const delta = zoomToLatDelta(14);
+    mapRef.current?.animateToRegion({
+      latitude: userCoords.latitude,
+      longitude: userCoords.longitude,
+      latitudeDelta: delta,
+      longitudeDelta: delta,
+    }, 500);
   }, [userCoords]);
 
   // ── Fermer la recherche ──────────────────────────────────────────────────────
@@ -220,22 +134,26 @@ export default function MapScreen() {
   const handleSelectLocal = useCallback((result: SearchResult) => {
     setShowResults(false);
     setSearchQuery("");
-    cameraRef.current?.setCamera({
-      centerCoordinate: [result.longitude, result.latitude],
-      zoomLevel: 16,
-      animationDuration: 400,
-    });
+    const delta = zoomToLatDelta(16);
+    mapRef.current?.animateToRegion({
+      latitude: result.latitude,
+      longitude: result.longitude,
+      latitudeDelta: delta,
+      longitudeDelta: delta,
+    }, 400);
   }, []);
 
   // ── Sélection résultat Google ────────────────────────────────────────────────
   const handleSelectGoogle = useCallback((result: MappedGoogleResult) => {
     setShowResults(false);
     setSearchQuery("");
-    cameraRef.current?.setCamera({
-      centerCoordinate: [result.longitude, result.latitude],
-      zoomLevel: 16,
-      animationDuration: 400,
-    });
+    const delta = zoomToLatDelta(16);
+    mapRef.current?.animateToRegion({
+      latitude: result.latitude,
+      longitude: result.longitude,
+      latitudeDelta: delta,
+      longitudeDelta: delta,
+    }, 400);
 
     // Supabase en arrière-plan (ne bloque pas l'animation)
     void (async () => {
@@ -336,93 +254,39 @@ export default function MapScreen() {
 
   const showZoomHint = currentZoom < 10 && !showResults;
   const recenterBottom = insets.bottom + (selectedRestaurant ? 170 : 32);
+  const initialDelta = zoomToLatDelta(13);
 
   // ── Rendu ────────────────────────────────────────────────────────────────────
   return (
     <View style={styles.container}>
-      {/* Carte MapLibre — OpenFreeMap (gratuit, open-source, pas de clé) */}
-      <MapLibreGL.MapView
+      <MapView
         ref={mapRef}
         style={styles.map}
-        styleURL={STYLE_URL}
-        onRegionDidChange={handleRegionChange}
-        onDidFinishLoadingMap={handleRegionChange}
-        logoEnabled={false}
-        attributionEnabled={false}
-        compassEnabled={true}
-        compassViewPosition={3}
+        showsUserLocation
+        showsMyLocationButton={false}
+        showsCompass
+        initialRegion={{
+          latitude: userCoords.latitude,
+          longitude: userCoords.longitude,
+          latitudeDelta: initialDelta,
+          longitudeDelta: initialDelta,
+        }}
+        onRegionChangeComplete={handleRegionChange}
       >
-        <MapLibreGL.Camera
-          ref={cameraRef}
-          defaultSettings={{
-            centerCoordinate: [userCoords.longitude, userCoords.latitude],
-            zoomLevel: 13,
-          }}
-        />
-
-        {/* Point GPS de l'utilisateur (natif MapLibre) */}
-        <MapLibreGL.UserLocation visible animated />
-
-        {/* Restaurants : clustering natif GPU */}
-        <MapLibreGL.ShapeSource
-          id="restaurants"
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          shape={restaurantsGeoJSON as any}
-          cluster
-          clusterRadius={50}
-          clusterMaxZoomLevel={14}
-          onPress={handleShapePress}
-        >
-          {/* ── Cercles de cluster ── */}
-          <MapLibreGL.CircleLayer
-            id="clusters"
-            minZoomLevel={10}
-            filter={["has", "point_count"]}
-            style={{
-              circleColor: "#E8472A",
-              circleOpacity: 0.88,
-              circleRadius: [
-                "step", ["get", "point_count"],
-                18,        // count < 10
-                10,  22,   // count 10-49
-                50,  28,   // count 50-199
-                200, 34,   // count ≥ 200
-              ],
-              circleStrokeColor: "rgba(232, 71, 42, 0.25)",
-              circleStrokeWidth: 8,
-            }}
-          />
-
-          {/* ── Compteur du cluster ── */}
-          <MapLibreGL.SymbolLayer
-            id="cluster-count"
-            minZoomLevel={10}
-            filter={["has", "point_count"]}
-            style={{
-              textField: ["get", "point_count_abbreviated"],
-              textSize: 13,
-              textColor: "#FFFFFF",
-              textFont: ["Open Sans Bold", "Arial Unicode MS Bold"],
-              textAllowOverlap: true,
-              textIgnorePlacement: true,
-            }}
-          />
-
-          {/* ── Marqueurs individuels ── */}
-          <MapLibreGL.CircleLayer
-            id="restaurants-dots"
-            minZoomLevel={10}
-            filter={["!", ["has", "point_count"]]}
-            style={{
-              circleColor: CATEGORY_COLOR_EXPR,
-              circleRadius: CIRCLE_RADIUS_EXPR,
-              circleStrokeColor: "#FFFFFF",
-              circleStrokeWidth: 1.5,
-              circleOpacity: 0.95,
-            }}
-          />
-        </MapLibreGL.ShapeSource>
-      </MapLibreGL.MapView>
+        {restaurants.map((restaurant) => {
+          const color = getCategoryConfig(restaurant.category).color;
+          return (
+            <Marker
+              key={restaurant.id}
+              coordinate={{ latitude: restaurant.latitude, longitude: restaurant.longitude }}
+              onPress={() => handleMarkerPress(restaurant)}
+              tracksViewChanges={false}
+            >
+              <View style={[styles.markerDot, { backgroundColor: color }]} />
+            </Marker>
+          );
+        })}
+      </MapView>
 
       {/* Backdrop : ferme la liste quand on tape la carte */}
       {showResults && (
@@ -519,6 +383,15 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlign: "center",
     lineHeight: 22,
+  },
+
+  // ── Marqueur ───────────────────────────────────────────────────────────────
+  markerDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
   },
 
   // ── Recherche ──────────────────────────────────────────────────────────────

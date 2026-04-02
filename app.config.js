@@ -44,7 +44,6 @@ const config = {
       "expo-font",
       "expo-image",
       "expo-web-browser",
-      "@maplibre/maplibre-react-native",
     ],
     experiments: {
       typedRoutes: true,
