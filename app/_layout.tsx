@@ -20,7 +20,7 @@ function RootLayoutNav() {
       router.replace("/login");
     } else if (session && onAuthScreen) {
       // Déjà connecté → vers l'accueil
-      router.replace("/");
+      router.replace("/map");
     }
   }, [session, loading, segments]);
 
