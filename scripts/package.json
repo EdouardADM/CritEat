@@ -1,0 +1,11 @@
+{
+  "name": "criteat-scripts",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@supabase/supabase-js": "^2.100.1",
+    "dotenv": "^16.4.5",
+    "duckdb": "^1.1.3"
+  }
+}

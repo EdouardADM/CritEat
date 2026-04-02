@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx expo:*)",
+      "Bash(npm install:*)",
+      "Bash(find C:UsersSuperSmallWolfEcoleTFECritEat/app -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\))",
+      "Bash(find C:UsersSuperSmallWolfEcoleTFECritEat/hooks -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\))",
+      "Bash(find C:UsersSuperSmallWolfEcoleTFECritEat/components -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\))"
+    ]
+  }
+}
