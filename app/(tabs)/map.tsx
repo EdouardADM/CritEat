@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import SearchBar from "../../components/SearchBar";
 import SearchResults from "../../components/SearchResults";
 import RestaurantPreviewCard from "../../components/RestaurantPreviewCard";
+import FilterBar from "../../components/FilterBar";
 import { useRestaurants, type MapBounds, type Restaurant } from "../../hooks/useRestaurants";
 import {
   useRestaurantSearch,
@@ -20,7 +21,7 @@ import {
   type SearchResult,
 } from "../../hooks/useRestaurantSearch";
 import { supabase } from "../../lib/supabase";
-import { getCategoryConfig } from "../../constants/categories";
+import { getCategoryConfig, type RestaurantCategory } from "../../constants/categories";
 
 type Coords = { latitude: number; longitude: number };
 
@@ -47,6 +48,15 @@ export default function MapScreen() {
   // ── Recherche ───────────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState("");
   const [showResults, setShowResults] = useState(false);
+
+  // ── Filtres catégories ───────────────────────────────────────────────────────
+  const [activeCategories, setActiveCategories] = useState<RestaurantCategory[]>([]);
+
+  const handleToggleCategory = useCallback((category: RestaurantCategory) => {
+    setActiveCategories((prev) =>
+      prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category]
+    );
+  }, []);
 
   // ── Fiche restaurant ────────────────────────────────────────────────────────
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
@@ -81,6 +91,7 @@ export default function MapScreen() {
 
   // ── Restaurants (fetch + cache) ──────────────────────────────────────────────
   const { restaurants, loading: restaurantsLoading } = useRestaurants(mapBounds);
+  const visibleRestaurantsRef = useRef<Restaurant[]>([]);
 
   // ── Recherche (debounce 400ms) ───────────────────────────────────────────────
   const { localResults, googleResults, isLoading: isSearchLoading } =
@@ -99,6 +110,7 @@ export default function MapScreen() {
   // ── Mise à jour bounds quand la carte se déplace ─────────────────────────────
   const handleRegionChange = useCallback((region: Region) => {
     const zoom = Math.round(Math.log2(360 / region.latitudeDelta));
+    latitudeDeltaRef.current = region.latitudeDelta;
     setCurrentZoom(zoom);
     setMapBounds({
       minLat: region.latitude - region.latitudeDelta / 2,
@@ -109,11 +121,34 @@ export default function MapScreen() {
     });
   }, []);
 
-  // ── Tap sur un marqueur restaurant ──────────────────────────────────────────
-  const handleMarkerPress = useCallback((restaurant: Restaurant) => {
-    setSelectedRestaurant(restaurant);
-    setShowResults(false);
-  }, []);
+  // ── Tap sur la carte → restaurant le plus proche du point tapé ──────────────
+  const latitudeDeltaRef = useRef(zoomToLatDelta(13));
+
+  const handleMapPress = useCallback((e: { nativeEvent: { coordinate: { latitude: number; longitude: number } } }) => {
+    if (showResults) return;
+    const { latitude, longitude } = e.nativeEvent.coordinate;
+    // Seuil adapté au zoom : ~8% de la hauteur visible
+    const threshold = latitudeDeltaRef.current * 0.08;
+    let nearest: Restaurant | null = null;
+    let minDist = Infinity;
+    for (const r of visibleRestaurantsRef.current) {
+      const d = Math.hypot(r.latitude - latitude, r.longitude - longitude);
+      if (d < minDist) { minDist = d; nearest = r; }
+    }
+    if (nearest && minDist < threshold) {
+      setSelectedRestaurant(nearest);
+      // Décale légèrement vers le haut pour que le marqueur reste visible au-dessus de la fiche
+      const delta = zoomToLatDelta(16);
+      mapRef.current?.animateToRegion({
+        latitude: nearest.latitude - delta * 0.18,
+        longitude: nearest.longitude,
+        latitudeDelta: delta,
+        longitudeDelta: delta,
+      }, 350);
+    } else {
+      setSelectedRestaurant(null);
+    }
+  }, [showResults]);
 
   // ── Recentrer sur l'utilisateur ──────────────────────────────────────────────
   const handleRecenter = useCallback(() => {
@@ -252,6 +287,11 @@ export default function MapScreen() {
     );
   }
 
+  const visibleRestaurants = activeCategories.length === 0
+    ? restaurants
+    : restaurants.filter((r) => activeCategories.includes(r.category as RestaurantCategory));
+  visibleRestaurantsRef.current = visibleRestaurants;
+
   const showZoomHint = currentZoom < 10 && !showResults;
   const recenterBottom = insets.bottom + (selectedRestaurant ? 170 : 32);
   const initialDelta = zoomToLatDelta(13);
@@ -272,17 +312,19 @@ export default function MapScreen() {
           longitudeDelta: initialDelta,
         }}
         onRegionChangeComplete={handleRegionChange}
+        onPress={handleMapPress}
       >
-        {restaurants.map((restaurant) => {
+        {(selectedRestaurant ? [selectedRestaurant] : visibleRestaurants).map((restaurant) => {
           const color = getCategoryConfig(restaurant.category).color;
           return (
             <Marker
               key={restaurant.id}
               coordinate={{ latitude: restaurant.latitude, longitude: restaurant.longitude }}
-              onPress={() => handleMarkerPress(restaurant)}
               tracksViewChanges={false}
             >
-              <View style={[styles.markerDot, { backgroundColor: color }]} />
+              <View style={styles.markerHitArea}>
+                <View style={[styles.markerDot, { backgroundColor: color }]} />
+              </View>
             </Marker>
           );
         })}
@@ -319,6 +361,19 @@ export default function MapScreen() {
           />
         )}
       </View>
+
+      {/* Filtres catégories */}
+      {!showResults && (
+        <View
+          style={[styles.filterOverlay, { top: insets.top + 64 }]}
+          pointerEvents="box-none"
+        >
+          <FilterBar
+            activeCategories={activeCategories}
+            onToggle={handleToggleCategory}
+          />
+        </View>
+      )}
 
       {/* Badge chargement restaurants */}
       {restaurantsLoading && !showResults && (
@@ -386,12 +441,23 @@ const styles = StyleSheet.create({
   },
 
   // ── Marqueur ───────────────────────────────────────────────────────────────
+  markerHitArea: {
+    width: 36,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   markerDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     borderWidth: 2,
     borderColor: "#FFFFFF",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25,
+    shadowRadius: 2,
+    elevation: 3,
   },
 
   // ── Recherche ──────────────────────────────────────────────────────────────
@@ -400,6 +466,14 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 12,
     right: 12,
+    zIndex: 20,
+  },
+
+  // ── Filtres ────────────────────────────────────────────────────────────────
+  filterOverlay: {
+    position: "absolute",
+    left: 0,
+    right: 0,
     zIndex: 20,
   },
 
