@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -7,8 +7,9 @@ import {
   Text,
   View,
 } from "react-native";
-import MapView, { Marker, Region } from "react-native-maps";
+import MapLibreGL from "@maplibre/maplibre-react-native";
 import * as Location from "expo-location";
+import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import SearchBar from "../../components/SearchBar";
 import SearchResults from "../../components/SearchResults";
@@ -21,24 +22,59 @@ import {
   type SearchResult,
 } from "../../hooks/useRestaurantSearch";
 import { supabase } from "../../lib/supabase";
-import { getCategoryConfig, type RestaurantCategory } from "../../constants/categories";
+import { type RestaurantCategory } from "../../constants/categories";
+import { restaurantsToGeoJSON } from "../../utils/geo";
 
 type Coords = { latitude: number; longitude: number };
 
-// Convertit un zoomLevel MapLibre en latitudeDelta react-native-maps
-function zoomToLatDelta(zoomLevel: number): number {
-  return 360 / Math.pow(2, zoomLevel);
-}
+// Style OpenFreeMap (gratuit, pas de clé API)
+const OPENFREEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
+
+// Fallback raster OSM si OpenFreeMap n'est pas disponible
+const FALLBACK_STYLE = {
+  version: 8,
+  sources: {
+    osm: {
+      type: "raster",
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      tileSize: 256,
+      attribution: "© OpenStreetMap contributors",
+      maxzoom: 19,
+    },
+  },
+  layers: [{ id: "osm", type: "raster", source: "osm" }],
+};
+
+// Expression MapLibre : couleur par catégorie (correspond à CATEGORY_CONFIG)
+const CATEGORY_COLOR_EXPRESSION = [
+  "match",
+  ["get", "category"],
+  "french",        "#2563EB",
+  "italian",       "#16A34A",
+  "japanese",      "#DC2626",
+  "chinese",       "#EA580C",
+  "american",      "#7C3AED",
+  "mexican",       "#B45309",
+  "indian",        "#D97706",
+  "thai",          "#0891B2",
+  "mediterranean", "#0284C7",
+  "fast_food",     "#F59E0B",
+  "cafe",          "#92400E",
+  "bakery",        "#CA8A04",
+  "seafood",       "#0E7490",
+  "vegetarian",    "#65A30D",
+  /* default */    "#6B7280",
+];
 
 // ── Composant ─────────────────────────────────────────────────────────────────
 
 export default function MapScreen() {
   const insets = useSafeAreaInsets();
-  const mapRef = useRef<MapView>(null);
+  const mapRef = useRef<MapLibreGL.MapView>(null);
+  const cameraRef = useRef<MapLibreGL.Camera>(null);
 
   // ── GPS ─────────────────────────────────────────────────────────────────────
   const [userCoords, setUserCoords] = useState<Coords | null>(null);
-  const [gpsError, setGpsError] = useState<string | null>(null);
   const [gpsLoading, setGpsLoading] = useState(true);
 
   // ── Carte ───────────────────────────────────────────────────────────────────
@@ -51,12 +87,6 @@ export default function MapScreen() {
 
   // ── Filtres catégories ───────────────────────────────────────────────────────
   const [activeCategories, setActiveCategories] = useState<RestaurantCategory[]>([]);
-
-  const handleToggleCategory = useCallback((category: RestaurantCategory) => {
-    setActiveCategories((prev) =>
-      prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category]
-    );
-  }, []);
 
   // ── Fiche restaurant ────────────────────────────────────────────────────────
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
@@ -91,75 +121,136 @@ export default function MapScreen() {
 
   // ── Restaurants (fetch + cache) ──────────────────────────────────────────────
   const { restaurants, loading: restaurantsLoading } = useRestaurants(mapBounds);
-  const visibleRestaurantsRef = useRef<Restaurant[]>([]);
 
   // ── Recherche (debounce 400ms) ───────────────────────────────────────────────
   const { localResults, googleResults, isLoading: isSearchLoading } =
     useRestaurantSearch(searchQuery, userCoords);
 
-  // ── Toast helper ─────────────────────────────────────────────────────────────
-  const showToast = useCallback((message: string) => {
-    setToastMessage(message);
-    Animated.sequence([
-      Animated.timing(toastOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
-      Animated.delay(2200),
-      Animated.timing(toastOpacity, { toValue: 0, duration: 350, useNativeDriver: true }),
-    ]).start();
-  }, [toastOpacity]);
+  // ── Filtrage + conversion GeoJSON ────────────────────────────────────────────
+  const visibleRestaurants = useMemo(
+    () =>
+      activeCategories.length === 0
+        ? restaurants
+        : restaurants.filter((r) =>
+            activeCategories.includes(r.category as RestaurantCategory)
+          ),
+    [restaurants, activeCategories]
+  );
 
-  // ── Mise à jour bounds quand la carte se déplace ─────────────────────────────
-  const handleRegionChange = useCallback((region: Region) => {
-    const zoom = Math.round(Math.log2(360 / region.latitudeDelta));
-    latitudeDeltaRef.current = region.latitudeDelta;
-    setCurrentZoom(zoom);
-    setMapBounds({
-      minLat: region.latitude - region.latitudeDelta / 2,
-      maxLat: region.latitude + region.latitudeDelta / 2,
-      minLng: region.longitude - region.longitudeDelta / 2,
-      maxLng: region.longitude + region.longitudeDelta / 2,
-      zoom,
-    });
+  const restaurantsGeoJSON = useMemo(
+    () => restaurantsToGeoJSON(visibleRestaurants),
+    [visibleRestaurants]
+  );
+
+  // ── Toggle filtre catégorie ──────────────────────────────────────────────────
+  const handleToggleCategory = useCallback((category: RestaurantCategory) => {
+    setActiveCategories((prev) =>
+      prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category]
+    );
   }, []);
 
-  // ── Tap sur la carte → restaurant le plus proche du point tapé ──────────────
-  const latitudeDeltaRef = useRef(zoomToLatDelta(13));
+  // ── Toast helper ─────────────────────────────────────────────────────────────
+  const showToast = useCallback(
+    (message: string) => {
+      setToastMessage(message);
+      Animated.sequence([
+        Animated.timing(toastOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
+        Animated.delay(2200),
+        Animated.timing(toastOpacity, { toValue: 0, duration: 350, useNativeDriver: true }),
+      ]).start();
+    },
+    [toastOpacity]
+  );
 
-  const handleMapPress = useCallback((e: { nativeEvent: { coordinate: { latitude: number; longitude: number } } }) => {
-    if (showResults) return;
-    const { latitude, longitude } = e.nativeEvent.coordinate;
-    // Seuil adapté au zoom : ~8% de la hauteur visible
-    const threshold = latitudeDeltaRef.current * 0.08;
-    let nearest: Restaurant | null = null;
-    let minDist = Infinity;
-    for (const r of visibleRestaurantsRef.current) {
-      const d = Math.hypot(r.latitude - latitude, r.longitude - longitude);
-      if (d < minDist) { minDist = d; nearest = r; }
+  // ── Mise à jour bounds quand la carte se déplace ─────────────────────────────
+  const handleRegionChange = useCallback(async () => {
+    if (!mapRef.current) return;
+    try {
+      const zoom = await mapRef.current.getZoom();
+      const bounds = await mapRef.current.getVisibleBounds();
+      if (bounds) {
+        // bounds = [[lngEast, latNorth], [lngWest, latSouth]]
+        const [ne, sw] = bounds;
+        const roundedZoom = Math.round(zoom);
+        setCurrentZoom(roundedZoom);
+        setMapBounds({
+          minLat: sw[1],
+          minLng: sw[0],
+          maxLat: ne[1],
+          maxLng: ne[0],
+          zoom: roundedZoom,
+        });
+      }
+    } catch {
+      // La carte n'est peut-être pas encore prête
     }
-    if (nearest && minDist < threshold) {
-      setSelectedRestaurant(nearest);
-      // Décale légèrement vers le haut pour que le marqueur reste visible au-dessus de la fiche
-      const delta = zoomToLatDelta(16);
-      mapRef.current?.animateToRegion({
-        latitude: nearest.latitude - delta * 0.18,
-        longitude: nearest.longitude,
-        latitudeDelta: delta,
-        longitudeDelta: delta,
-      }, 350);
+  }, []);
+
+  // ── Tap sur un point ou cluster dans le ShapeSource ──────────────────────────
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleRestaurantPress = useCallback(async (event: any) => {
+    const feature = event.features?.[0];
+    if (!feature) return;
+
+    if (feature.properties?.point_count) {
+      // Cluster → zoomer dessus
+      const zoom = (await mapRef.current?.getZoom()) ?? 13;
+      cameraRef.current?.setCamera({
+        centerCoordinate: feature.geometry.coordinates,
+        zoomLevel: zoom + 2,
+        animationDuration: 500,
+      });
     } else {
-      setSelectedRestaurant(null);
+      // Restaurant individuel → afficher la preview card
+      const props = feature.properties as {
+        id: string;
+        place_id: string;
+        name: string;
+        category: string;
+        address: string;
+        city: string;
+        composite_score: number | null;
+        popularity_score: number | null;
+        review_count: number;
+      };
+      const [lng, lat] = feature.geometry.coordinates as [number, number];
+      setSelectedRestaurant({
+        id: props.id,
+        place_id: props.place_id,
+        name: props.name,
+        category: props.category,
+        address: props.address,
+        city: props.city,
+        latitude: lat,
+        longitude: lng,
+        composite_score: props.composite_score,
+        popularity_score: props.popularity_score,
+        review_count: props.review_count,
+      });
+      // Décale légèrement vers le bas pour que le marqueur reste visible au-dessus de la fiche
+      cameraRef.current?.setCamera({
+        centerCoordinate: [lng, lat - 0.002],
+        zoomLevel: 16,
+        animationDuration: 350,
+      });
     }
+  }, []);
+
+  // ── Tap sur le fond de carte → ferme la fiche ────────────────────────────────
+  const handleMapPress = useCallback(() => {
+    if (showResults) return;
+    setSelectedRestaurant(null);
   }, [showResults]);
 
   // ── Recentrer sur l'utilisateur ──────────────────────────────────────────────
   const handleRecenter = useCallback(() => {
     if (!userCoords) return;
-    const delta = zoomToLatDelta(14);
-    mapRef.current?.animateToRegion({
-      latitude: userCoords.latitude,
-      longitude: userCoords.longitude,
-      latitudeDelta: delta,
-      longitudeDelta: delta,
-    }, 500);
+    cameraRef.current?.setCamera({
+      centerCoordinate: [userCoords.longitude, userCoords.latitude],
+      zoomLevel: 14,
+      animationMode: "flyTo",
+      animationDuration: 500,
+    });
   }, [userCoords]);
 
   // ── Fermer la recherche ──────────────────────────────────────────────────────
@@ -169,81 +260,86 @@ export default function MapScreen() {
   const handleSelectLocal = useCallback((result: SearchResult) => {
     setShowResults(false);
     setSearchQuery("");
-    const delta = zoomToLatDelta(16);
-    mapRef.current?.animateToRegion({
-      latitude: result.latitude,
-      longitude: result.longitude,
-      latitudeDelta: delta,
-      longitudeDelta: delta,
-    }, 400);
+    cameraRef.current?.setCamera({
+      centerCoordinate: [result.longitude, result.latitude],
+      zoomLevel: 16,
+      animationMode: "flyTo",
+      animationDuration: 400,
+    });
   }, []);
 
   // ── Sélection résultat Google ────────────────────────────────────────────────
-  const handleSelectGoogle = useCallback((result: MappedGoogleResult) => {
-    setShowResults(false);
-    setSearchQuery("");
-    const delta = zoomToLatDelta(16);
-    mapRef.current?.animateToRegion({
-      latitude: result.latitude,
-      longitude: result.longitude,
-      latitudeDelta: delta,
-      longitudeDelta: delta,
-    }, 400);
+  const handleSelectGoogle = useCallback(
+    (result: MappedGoogleResult) => {
+      setShowResults(false);
+      setSearchQuery("");
+      cameraRef.current?.setCamera({
+        centerCoordinate: [result.longitude, result.latitude],
+        zoomLevel: 16,
+        animationMode: "flyTo",
+        animationDuration: 400,
+      });
 
-    // Supabase en arrière-plan (ne bloque pas l'animation)
-    void (async () => {
-      try {
-        const { data: dupData } = await supabase.rpc("find_duplicate_restaurant", {
-          search_name: result.name,
-          search_lat: result.latitude,
-          search_lng: result.longitude,
-        });
-        const duplicate = (dupData as { id: string; name: string; place_id: string }[] | null)?.[0];
-
-        if (duplicate) {
-          const { data: existing } = await supabase
-            .from("restaurants")
-            .select("phone, website")
-            .eq("id", duplicate.id)
-            .single();
-
-          const updates: Record<string, string> = {};
-          if (!existing?.phone && result.phone) updates.phone = result.phone;
-          if (!existing?.website && result.website) updates.website = result.website;
-
-          if (Object.keys(updates).length > 0) {
-            await supabase.from("restaurants").update(updates).eq("id", duplicate.id);
-          }
-        } else {
-          await supabase.rpc("batch_upsert_restaurants", {
-            restaurants: [{
-              place_id:        result.place_id,
-              name:            result.name,
-              category:        result.category,
-              address:         result.address,
-              city:            result.city,
-              postcode:        result.postcode,
-              latitude:        result.latitude,
-              longitude:       result.longitude,
-              phone:           result.phone,
-              website:         result.website,
-              opening_hours:   result.opening_hours,
-              description:     null,
-              takeaway:        null,
-              delivery:        null,
-              outdoor_seating: null,
-              wheelchair:      null,
-              diet_options:    null,
-              source:          "google",
-            }],
+      // Supabase en arrière-plan (ne bloque pas l'animation)
+      void (async () => {
+        try {
+          const { data: dupData } = await supabase.rpc("find_duplicate_restaurant", {
+            search_name: result.name,
+            search_lat: result.latitude,
+            search_lng: result.longitude,
           });
-          showToast("Restaurant ajouté à Criteat !");
+          const duplicate = (
+            dupData as { id: string; name: string; place_id: string }[] | null
+          )?.[0];
+
+          if (duplicate) {
+            const { data: existing } = await supabase
+              .from("restaurants")
+              .select("phone, website")
+              .eq("id", duplicate.id)
+              .single();
+
+            const updates: Record<string, string> = {};
+            if (!existing?.phone && result.phone) updates.phone = result.phone;
+            if (!existing?.website && result.website) updates.website = result.website;
+
+            if (Object.keys(updates).length > 0) {
+              await supabase.from("restaurants").update(updates).eq("id", duplicate.id);
+            }
+          } else {
+            await supabase.rpc("batch_upsert_restaurants", {
+              restaurants: [
+                {
+                  place_id:        result.place_id,
+                  name:            result.name,
+                  category:        result.category,
+                  address:         result.address,
+                  city:            result.city,
+                  postcode:        result.postcode,
+                  latitude:        result.latitude,
+                  longitude:       result.longitude,
+                  phone:           result.phone,
+                  website:         result.website,
+                  opening_hours:   result.opening_hours,
+                  description:     null,
+                  takeaway:        null,
+                  delivery:        null,
+                  outdoor_seating: null,
+                  wheelchair:      null,
+                  diet_options:    null,
+                  source:          "google",
+                },
+              ],
+            });
+            showToast("Restaurant ajouté à Criteat !");
+          }
+        } catch {
+          // Dégradation silencieuse — la carte a quand même navigué
         }
-      } catch {
-        // Dégradation silencieuse — la carte a quand même navigué
-      }
-    })();
-  }, [showToast]);
+      })();
+    },
+    [showToast]
+  );
 
   // ── Handlers recherche ───────────────────────────────────────────────────────
   const handleQueryChange = useCallback((text: string) => {
@@ -271,14 +367,6 @@ export default function MapScreen() {
     );
   }
 
-  if (gpsError) {
-    return (
-      <View style={styles.centered}>
-        <Text style={styles.errorText}>{gpsError}</Text>
-      </View>
-    );
-  }
-
   if (!userCoords) {
     return (
       <View style={styles.centered}>
@@ -287,48 +375,95 @@ export default function MapScreen() {
     );
   }
 
-  const visibleRestaurants = activeCategories.length === 0
-    ? restaurants
-    : restaurants.filter((r) => activeCategories.includes(r.category as RestaurantCategory));
-  visibleRestaurantsRef.current = visibleRestaurants;
-
   const showZoomHint = currentZoom < 10 && !showResults;
   const recenterBottom = insets.bottom + (selectedRestaurant ? 170 : 32);
-  const initialDelta = zoomToLatDelta(13);
 
   // ── Rendu ────────────────────────────────────────────────────────────────────
   return (
     <View style={styles.container}>
-      <MapView
+      <MapLibreGL.MapView
         ref={mapRef}
         style={styles.map}
-        showsUserLocation
-        showsMyLocationButton={false}
-        showsCompass
-        initialRegion={{
-          latitude: userCoords.latitude,
-          longitude: userCoords.longitude,
-          latitudeDelta: initialDelta,
-          longitudeDelta: initialDelta,
-        }}
-        onRegionChangeComplete={handleRegionChange}
+        styleURL={OPENFREEMAP_STYLE}
+        compassEnabled={true}
+        logoEnabled={false}
+        attributionEnabled={true}
+        attributionPosition={{ bottom: 8, left: 8 }}
+        onRegionDidChange={handleRegionChange}
         onPress={handleMapPress}
       >
-        {(selectedRestaurant ? [selectedRestaurant] : visibleRestaurants).map((restaurant) => {
-          const color = getCategoryConfig(restaurant.category).color;
-          return (
-            <Marker
-              key={restaurant.id}
-              coordinate={{ latitude: restaurant.latitude, longitude: restaurant.longitude }}
-              tracksViewChanges={false}
-            >
-              <View style={styles.markerHitArea}>
-                <View style={[styles.markerDot, { backgroundColor: color }]} />
-              </View>
-            </Marker>
-          );
-        })}
-      </MapView>
+        <MapLibreGL.Camera
+          ref={cameraRef}
+          centerCoordinate={[userCoords.longitude, userCoords.latitude]}
+          zoomLevel={13}
+          animationDuration={0}
+        />
+
+        <MapLibreGL.UserLocation visible={true} animated={true} />
+
+        <MapLibreGL.ShapeSource
+          id="restaurants"
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          shape={restaurantsGeoJSON as any}
+          cluster={true}
+          clusterRadius={50}
+          clusterMaxZoomLevel={14}
+          onPress={handleRestaurantPress}
+        >
+          {/* Cercles pour les clusters */}
+          <MapLibreGL.CircleLayer
+            id="clusters"
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            filter={["has", "point_count"] as any}
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            style={{
+              circleColor: "#E8593C",
+              circleRadius: [
+                "step",
+                ["get", "point_count"],
+                15, 50, 20, 100, 25, 500, 35,
+              ] as any,
+              circleOpacity: 0.85,
+              circleStrokeColor: "#FFFFFF",
+              circleStrokeWidth: 2,
+            }}
+          />
+
+          {/* Nombre dans les clusters */}
+          <MapLibreGL.SymbolLayer
+            id="cluster-count"
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            filter={["has", "point_count"] as any}
+            style={{
+              textField: ["get", "point_count_abbreviated"] as any,
+              textSize: 13,
+              textColor: "#FFFFFF",
+              textFont: ["Open Sans Bold", "Arial Unicode MS Bold"],
+              textAllowOverlap: true,
+            }}
+          />
+
+          {/* Marqueurs individuels (cercles colorés par catégorie) */}
+          <MapLibreGL.CircleLayer
+            id="restaurant-points"
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            filter={["!", ["has", "point_count"]] as any}
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            style={{
+              circleColor: CATEGORY_COLOR_EXPRESSION as any,
+              circleRadius: [
+                "interpolate",
+                ["linear"],
+                ["coalesce", ["get", "popularity_score"], 0],
+                0, 5, 50, 7, 100, 9,
+              ] as any,
+              circleStrokeColor: "#FFFFFF",
+              circleStrokeWidth: 1.5,
+              circleOpacity: 0.9,
+            }}
+          />
+        </MapLibreGL.ShapeSource>
+      </MapLibreGL.MapView>
 
       {/* Backdrop : ferme la liste quand on tape la carte */}
       {showResults && (
@@ -395,7 +530,7 @@ export default function MapScreen() {
         style={[styles.recenterBtn, { bottom: recenterBottom }]}
         onPress={handleRecenter}
       >
-        <Text style={styles.recenterIcon}>◎</Text>
+        <Ionicons name="locate" size={22} color="#E8472A" />
       </Pressable>
 
       {/* Preview restaurant au tap */}
@@ -421,6 +556,8 @@ export default function MapScreen() {
   );
 }
 
+// ── Styles ────────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
@@ -438,26 +575,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlign: "center",
     lineHeight: 22,
-  },
-
-  // ── Marqueur ───────────────────────────────────────────────────────────────
-  markerHitArea: {
-    width: 36,
-    height: 36,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  markerDot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 2,
-    borderColor: "#FFFFFF",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.25,
-    shadowRadius: 2,
-    elevation: 3,
   },
 
   // ── Recherche ──────────────────────────────────────────────────────────────
@@ -526,7 +643,6 @@ const styles = StyleSheet.create({
     elevation: 6,
     zIndex: 15,
   },
-  recenterIcon: { fontSize: 22, color: "#E8472A" },
 
   // ── Toast ──────────────────────────────────────────────────────────────────
   toast: {

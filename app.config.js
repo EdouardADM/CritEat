@@ -11,13 +11,9 @@ const config = {
     newArchEnabled: true,
     ios: {
       supportsTablet: true,
+      bundleIdentifier: "com.criteat.app",
     },
     android: {
-      config: {
-        googleMaps: {
-          apiKey: process.env.EXPO_PUBLIC_GOOGLE_PLACES_KEY,
-        },
-      },
       package: "com.criteat.app",
       adaptiveIcon: {
         backgroundColor: "#E6F4FE",
@@ -34,6 +30,7 @@ const config = {
     },
     plugins: [
       "expo-router",
+      "@maplibre/maplibre-react-native",
       [
         "expo-splash-screen",
         {

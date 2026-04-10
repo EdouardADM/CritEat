@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { restaurantsToGeoJSON, type RestaurantFeatureCollection } from "../utils/geo";
 
 export type Restaurant = {
   id: string;
@@ -56,6 +57,7 @@ function filterByBounds(cache: Map<string, Restaurant>, bounds: CacheBounds): Re
 
 export function useRestaurants(bounds: MapBounds | null): {
   restaurants: Restaurant[];
+  restaurantsGeoJSON: RestaurantFeatureCollection;
   loading: boolean;
   error: string | null;
 } {
@@ -156,5 +158,10 @@ export function useRestaurants(bounds: MapBounds | null): {
     };
   }, [bounds, fetchForBounds]);
 
-  return { restaurants, loading, error };
+  const restaurantsGeoJSON = useMemo(
+    () => restaurantsToGeoJSON(restaurants),
+    [restaurants]
+  );
+
+  return { restaurants, restaurantsGeoJSON, loading, error };
 }

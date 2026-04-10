@@ -1,6 +1,10 @@
 import { useEffect } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { AuthProvider, useAuth } from "../context/AuthContext";
+import MapLibreGL from "@maplibre/maplibre-react-native";
+
+// MapLibre n'a pas besoin de token pour OpenStreetMap / OpenFreeMap
+MapLibreGL.setAccessToken(null);
 
 /** Gère les redirections en fonction de la session */
 function RootLayoutNav() {
