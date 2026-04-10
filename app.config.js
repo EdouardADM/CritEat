@@ -8,7 +8,10 @@ const config = {
     icon: "./assets/images/icon.png",
     scheme: "criteat",
     userInterfaceStyle: "automatic",
-    newArchEnabled: true,
+    // New Architecture désactivée : @maplibre/maplibre-react-native v10.x utilise
+    // ReactNativeHost directement dans MLRNLocationModule, incompatible avec la
+    // New Arch. À réactiver quand MapLibre supportera pleinement Fabric/TurboModules.
+    newArchEnabled: false,
     ios: {
       supportsTablet: true,
       bundleIdentifier: "com.criteat.app",

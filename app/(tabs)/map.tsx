@@ -36,6 +36,10 @@ type CameraTarget = {
   triggerKey: string;
 };
 
+// Délai après la fin d'une animation caméra avant de relâcher l'ancre native.
+// MapLibre a besoin d'un court buffer pour que le geste natif soit bien terminé.
+const CAMERA_RELEASE_BUFFER_MS = 150;
+
 // Style OpenFreeMap (gratuit, pas de clé API)
 const OPENFREEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 
@@ -98,9 +102,6 @@ export default function MapScreen() {
   const currentZoomRef = useRef(13);
   // Booléen d'état uniquement pour afficher/masquer le hint de zoom (change rarement)
   const [showZoomHint, setShowZoomHint] = useState(false);
-  // Ref anti-doublon : empêche un press fantôme sur le même restaurant < 2s
-  const lastPressRef = useRef<{ id: string; time: number } | null>(null);
-
   // ── Caméra contrôlée ─────────────────────────────────────────────────────────
   // null = caméra libre (pas d'ancre native). Valeur = animation en cours.
   // On NE PAS utiliser cameraRef.setCamera() directement : il établit une ancre
@@ -247,8 +248,13 @@ export default function MapScreen() {
     // → MapLibre n'a plus d'ancre → l'utilisateur peut naviguer librement.
     cameraTimerRef.current = setTimeout(
       () => setCameraTarget(null),
-      animationDuration + 150,
+      animationDuration + CAMERA_RELEASE_BUFFER_MS,
     );
+  }, []);
+
+  // Cleanup du timer caméra au démontage du composant
+  useEffect(() => () => {
+    if (cameraTimerRef.current) clearTimeout(cameraTimerRef.current);
   }, []);
 
   // ── Tap sur un point ou cluster dans le ShapeSource ──────────────────────────
