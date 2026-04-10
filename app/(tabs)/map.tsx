@@ -27,6 +27,15 @@ import { restaurantsToGeoJSON } from "../../utils/geo";
 
 type Coords = { latitude: number; longitude: number };
 
+// Position cible de la caméra. Quand null → caméra libre (aucune ancre native).
+type CameraTarget = {
+  center: [number, number];
+  zoom: number;
+  animationMode: "flyTo" | "easeTo" | "none";
+  animationDuration: number;
+  triggerKey: string;
+};
+
 // Style OpenFreeMap (gratuit, pas de clé API)
 const OPENFREEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 
@@ -73,45 +82,73 @@ export default function MapScreen() {
   const mapRef = useRef<MapLibreGL.MapView>(null);
   const cameraRef = useRef<MapLibreGL.Camera>(null);
 
+  const isRestaurantSelectedRef = useRef(false);
+  const selectedRestaurantRef = useRef<Restaurant | null>(null);
+  const showResultsRef = useRef(false);
+
   // ── GPS ─────────────────────────────────────────────────────────────────────
   const [userCoords, setUserCoords] = useState<Coords | null>(null);
   const [gpsLoading, setGpsLoading] = useState(true);
 
   // ── Carte ───────────────────────────────────────────────────────────────────
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
-  const [currentZoom, setCurrentZoom] = useState(13);
+  // currentZoom est un ref (pas state) pour éviter les re-renders à chaque pan/zoom.
+  // Un re-render sur chaque mouvement ferait re-évaluer les props du Camera, ce qui
+  // pousse un update bridge natif et ré-applique la dernière cible setCamera (snap).
+  const currentZoomRef = useRef(13);
+  // Booléen d'état uniquement pour afficher/masquer le hint de zoom (change rarement)
+  const [showZoomHint, setShowZoomHint] = useState(false);
+  // Ref anti-doublon : empêche un press fantôme sur le même restaurant < 2s
+  const lastPressRef = useRef<{ id: string; time: number } | null>(null);
+
+  // ── Caméra contrôlée ─────────────────────────────────────────────────────────
+  // null = caméra libre (pas d'ancre native). Valeur = animation en cours.
+  // On NE PAS utiliser cameraRef.setCamera() directement : il établit une ancre
+  // native persistante qui fait snapper la carte après chaque pan.
+  const [cameraTarget, setCameraTarget] = useState<CameraTarget | null>(null);
+  const cameraTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Recherche ───────────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState("");
   const [showResults, setShowResults] = useState(false);
+  useEffect(() => { showResultsRef.current = showResults; }, [showResults]);
 
   // ── Filtres catégories ───────────────────────────────────────────────────────
   const [activeCategories, setActiveCategories] = useState<RestaurantCategory[]>([]);
 
   // ── Fiche restaurant ────────────────────────────────────────────────────────
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
+  useEffect(() => { selectedRestaurantRef.current = selectedRestaurant; }, [selectedRestaurant]);
 
   // ── Toast ───────────────────────────────────────────────────────────────────
   const [toastMessage, setToastMessage] = useState("");
   const toastOpacity = useRef(new Animated.Value(0)).current;
 
   // ── Init GPS ─────────────────────────────────────────────────────────────────
+  // Stratégie deux-passes :
+  // 1. getLastKnownPositionAsync → instantané (cache OS), affiche la carte immédiatement
+  // 2. getCurrentPositionAsync   → fix précis en arrière-plan, recadre silencieusement
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
-        // TODO(DEBUG): Localisation désactivée → fallback Bruxelles. À SUPPRIMER avant prod.
         setUserCoords({ latitude: 50.8503, longitude: 4.3517 });
         setGpsLoading(false);
         return;
       }
       try {
-        const loc = await Location.getCurrentPositionAsync({
+        // Passe 1 : position en cache OS (< 50ms)
+        const last = await Location.getLastKnownPositionAsync();
+        if (last) {
+          setUserCoords({ latitude: last.coords.latitude, longitude: last.coords.longitude });
+          setGpsLoading(false);
+        }
+        // Passe 2 : fix frais en arrière-plan (quelques secondes)
+        const fresh = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         });
-        setUserCoords({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+        setUserCoords({ latitude: fresh.coords.latitude, longitude: fresh.coords.longitude });
       } catch {
-        // TODO(DEBUG): GPS indisponible → fallback Bruxelles. À SUPPRIMER avant prod.
         setUserCoords({ latitude: 50.8503, longitude: 4.3517 });
       } finally {
         setGpsLoading(false);
@@ -163,95 +200,118 @@ export default function MapScreen() {
   );
 
   // ── Mise à jour bounds quand la carte se déplace ─────────────────────────────
-  const handleRegionChange = useCallback(async () => {
-    if (!mapRef.current) return;
-    try {
-      const zoom = await mapRef.current.getZoom();
-      const bounds = await mapRef.current.getVisibleBounds();
-      if (bounds) {
-        // bounds = [[lngEast, latNorth], [lngWest, latSouth]]
-        const [ne, sw] = bounds;
-        const roundedZoom = Math.round(zoom);
-        setCurrentZoom(roundedZoom);
-        setMapBounds({
-          minLat: sw[1],
-          minLng: sw[0],
-          maxLat: ne[1],
-          maxLng: ne[0],
-          zoom: roundedZoom,
-        });
-      }
-    } catch {
-      // La carte n'est peut-être pas encore prête
-    }
+  // L'event fournit déjà zoomLevel et visibleBounds — pas d'appels bridge async.
+  // On n'utilise PAS setCurrentZoom(state) ici : chaque re-render pousse un update
+  // bridge au Camera natif qui ré-applique sa dernière cible setCamera → snap.
+  // On met à jour seulement le ref + un booléen qui change rarement (hint zoom).
+  const handleRegionChange = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (feature: any) => {
+      const { zoomLevel, visibleBounds } = feature.properties as {
+        zoomLevel: number;
+        visibleBounds: [[number, number], [number, number]];
+      };
+      const [ne, sw] = visibleBounds;
+      const roundedZoom = Math.round(zoomLevel);
+      currentZoomRef.current = roundedZoom;
+      // Re-render uniquement si on franchit le seuil du hint (< 10)
+      setShowZoomHint(prev => {
+        const hint = roundedZoom < 10;
+        return prev === hint ? prev : hint;
+      });
+      if (isRestaurantSelectedRef.current) return;
+      setMapBounds({
+        minLat: sw[1],
+        minLng: sw[0],
+        maxLat: ne[1],
+        maxLng: ne[0],
+        zoom: roundedZoom,
+      });
+    },
+    []
+  );
+
+  // ── Navigation caméra (props contrôlées, sans ancre native) ─────────────────
+  const moveCameraTo = useCallback((
+    center: [number, number],
+    zoom: number,
+    animationMode: CameraTarget["animationMode"] = "flyTo",
+    animationDuration = 400,
+  ) => {
+    if (cameraTimerRef.current) clearTimeout(cameraTimerRef.current);
+    setCameraTarget({
+      center, zoom, animationMode, animationDuration,
+      triggerKey: String(Date.now()),
+    });
+    // Après la fin de l'animation, on remet null → centerCoordinate = undefined
+    // → MapLibre n'a plus d'ancre → l'utilisateur peut naviguer librement.
+    cameraTimerRef.current = setTimeout(
+      () => setCameraTarget(null),
+      animationDuration + 150,
+    );
   }, []);
 
   // ── Tap sur un point ou cluster dans le ShapeSource ──────────────────────────
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handleRestaurantPress = useCallback(async (event: any) => {
-    const feature = event.features?.[0];
+  const handleRestaurantPress = useCallback((feature: any) => {
     if (!feature) return;
 
     if (feature.properties?.point_count) {
-      // Cluster → zoomer dessus
-      const zoom = (await mapRef.current?.getZoom()) ?? 13;
-      cameraRef.current?.setCamera({
-        centerCoordinate: feature.geometry.coordinates,
-        zoomLevel: zoom + 2,
-        animationDuration: 500,
-      });
-    } else {
-      // Restaurant individuel → afficher la preview card
-      const props = feature.properties as {
-        id: string;
-        place_id: string;
-        name: string;
-        category: string;
-        address: string;
-        city: string;
-        composite_score: number | null;
-        popularity_score: number | null;
-        review_count: number;
-      };
+      // ✅ LOGIQUE CLUSTER
       const [lng, lat] = feature.geometry.coordinates as [number, number];
+      moveCameraTo([lng, lat], currentZoomRef.current + 2, "easeTo", 500);
+    } else {
+      // ✅ LOGIQUE RESTAURANT
+      const props = feature.properties;
+      const [lng, lat] = feature.geometry.coordinates as [number, number];
+
+      isRestaurantSelectedRef.current = true;
       setSelectedRestaurant({
-        id: props.id,
-        place_id: props.place_id,
-        name: props.name,
-        category: props.category,
-        address: props.address,
-        city: props.city,
-        latitude: lat,
-        longitude: lng,
+        id: props.id, place_id: props.place_id, name: props.name,
+        category: props.category, address: props.address, city: props.city,
+        latitude: lat, longitude: lng,
         composite_score: props.composite_score,
         popularity_score: props.popularity_score,
         review_count: props.review_count,
       });
-      // Décale légèrement vers le bas pour que le marqueur reste visible au-dessus de la fiche
-      cameraRef.current?.setCamera({
-        centerCoordinate: [lng, lat - 0.002],
-        zoomLevel: 16,
-        animationDuration: 350,
-      });
+      moveCameraTo([lng, lat], 16, "flyTo", 350);
     }
-  }, []);
+  }, [moveCameraTo]);
 
   // ── Tap sur le fond de carte → ferme la fiche ────────────────────────────────
-  const handleMapPress = useCallback(() => {
-    if (showResults) return;
-    setSelectedRestaurant(null);
-  }, [showResults]);
+  // Utilise des refs pour éviter tout re-bind de onPress sur MapView (causerait
+  // un reset des gesture recognizers MapLibre et bloquerait la navigation).
+  const handleMapPress = useCallback(async (event: any) => {
+    if (showResultsRef.current) return;
+
+    const { screenPointX, screenPointY } = event.properties;
+
+    try {
+      const featureCollection = await mapRef.current?.queryRenderedFeaturesAtPoint(
+        [screenPointX, screenPointY],
+        undefined,
+        ["clusters", "restaurant-points"]
+      );
+
+      if (featureCollection && featureCollection.features.length > 0) {
+        handleRestaurantPress(featureCollection.features[0]);
+        return;
+      }
+    } catch (e) {
+      console.warn("Erreur de détection du clic:", e);
+    }
+
+    // Tap sur fond de carte → ferme la fiche si ouverte
+    if (selectedRestaurantRef.current) {
+      isRestaurantSelectedRef.current = false;
+      setSelectedRestaurant(null);
+    }
+  }, [handleRestaurantPress]);
 
   // ── Recentrer sur l'utilisateur ──────────────────────────────────────────────
   const handleRecenter = useCallback(() => {
     if (!userCoords) return;
-    cameraRef.current?.setCamera({
-      centerCoordinate: [userCoords.longitude, userCoords.latitude],
-      zoomLevel: 14,
-      animationMode: "flyTo",
-      animationDuration: 500,
-    });
-  }, [userCoords]);
+    moveCameraTo([userCoords.longitude, userCoords.latitude], 14, "flyTo", 500);
+  }, [userCoords, moveCameraTo]);
 
   // ── Fermer la recherche ──────────────────────────────────────────────────────
   const dismissSearch = useCallback(() => setShowResults(false), []);
@@ -260,25 +320,15 @@ export default function MapScreen() {
   const handleSelectLocal = useCallback((result: SearchResult) => {
     setShowResults(false);
     setSearchQuery("");
-    cameraRef.current?.setCamera({
-      centerCoordinate: [result.longitude, result.latitude],
-      zoomLevel: 16,
-      animationMode: "flyTo",
-      animationDuration: 400,
-    });
-  }, []);
+    moveCameraTo([result.longitude, result.latitude], 16, "flyTo", 400);
+  }, [moveCameraTo]);
 
   // ── Sélection résultat Google ────────────────────────────────────────────────
   const handleSelectGoogle = useCallback(
     (result: MappedGoogleResult) => {
       setShowResults(false);
       setSearchQuery("");
-      cameraRef.current?.setCamera({
-        centerCoordinate: [result.longitude, result.latitude],
-        zoomLevel: 16,
-        animationMode: "flyTo",
-        animationDuration: 400,
-      });
+      moveCameraTo([result.longitude, result.latitude], 16, "flyTo", 400);
 
       // Supabase en arrière-plan (ne bloque pas l'animation)
       void (async () => {
@@ -338,7 +388,7 @@ export default function MapScreen() {
         }
       })();
     },
-    [showToast]
+    [showToast, moveCameraTo]
   );
 
   // ── Handlers recherche ───────────────────────────────────────────────────────
@@ -356,6 +406,21 @@ export default function MapScreen() {
     setSearchQuery("");
     setShowResults(false);
   }, []);
+
+  // defaultSettings mémoïsé : prop stable → le Camera natif ne reçoit pas de bridge
+  // update à chaque re-render → MapLibre ne ré-applique plus sa dernière cible setCamera.
+  // Doit être AVANT les early returns pour respecter les Rules of Hooks.
+  const cameraDefaultSettings = useMemo(
+    () => ({
+      centerCoordinate: [
+        userCoords?.longitude ?? 0,
+        userCoords?.latitude ?? 0,
+      ] as [number, number],
+      zoomLevel: 13,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [] // intentionnellement vide : on veut le centre initial une seule fois
+  );
 
   // ── États GPS ────────────────────────────────────────────────────────────────
   if (gpsLoading) {
@@ -375,7 +440,6 @@ export default function MapScreen() {
     );
   }
 
-  const showZoomHint = currentZoom < 10 && !showResults;
   const recenterBottom = insets.bottom + (selectedRestaurant ? 170 : 32);
 
   // ── Rendu ────────────────────────────────────────────────────────────────────
@@ -384,7 +448,7 @@ export default function MapScreen() {
       <MapLibreGL.MapView
         ref={mapRef}
         style={styles.map}
-        styleURL={OPENFREEMAP_STYLE}
+        mapStyle={FALLBACK_STYLE}
         compassEnabled={true}
         logoEnabled={false}
         attributionEnabled={true}
@@ -392,14 +456,24 @@ export default function MapScreen() {
         onRegionDidChange={handleRegionChange}
         onPress={handleMapPress}
       >
+        {/*
+          Props contrôlées : quand cameraTarget est null, centerCoordinate est
+          undefined → MapLibre n'a pas d'ancre native → navigation libre.
+          Quand cameraTarget est défini, triggerKey change → animation déclenchée
+          une seule fois. Après animationDuration+150ms, cameraTarget repasse à
+          null → caméra libre.
+        */}
         <MapLibreGL.Camera
           ref={cameraRef}
-          centerCoordinate={[userCoords.longitude, userCoords.latitude]}
-          zoomLevel={13}
-          animationDuration={0}
+          defaultSettings={cameraDefaultSettings}
+          centerCoordinate={cameraTarget?.center}
+          zoomLevel={cameraTarget?.zoom}
+          animationMode={cameraTarget?.animationMode}
+          animationDuration={cameraTarget?.animationDuration}
+          triggerKey={cameraTarget?.triggerKey}
         />
 
-        <MapLibreGL.UserLocation visible={true} animated={true} />
+        <MapLibreGL.UserLocation visible={true} animated={false} />
 
         <MapLibreGL.ShapeSource
           id="restaurants"
@@ -408,7 +482,6 @@ export default function MapScreen() {
           cluster={true}
           clusterRadius={50}
           clusterMaxZoomLevel={14}
-          onPress={handleRestaurantPress}
         >
           {/* Cercles pour les clusters */}
           <MapLibreGL.CircleLayer
@@ -429,19 +502,6 @@ export default function MapScreen() {
             }}
           />
 
-          {/* Nombre dans les clusters */}
-          <MapLibreGL.SymbolLayer
-            id="cluster-count"
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            filter={["has", "point_count"] as any}
-            style={{
-              textField: ["get", "point_count_abbreviated"] as any,
-              textSize: 13,
-              textColor: "#FFFFFF",
-              textFont: ["Open Sans Bold", "Arial Unicode MS Bold"],
-              textAllowOverlap: true,
-            }}
-          />
 
           {/* Marqueurs individuels (cercles colorés par catégorie) */}
           <MapLibreGL.CircleLayer
@@ -475,8 +535,7 @@ export default function MapScreen() {
 
       {/* Overlay recherche */}
       <View
-        style={[styles.searchOverlay, { top: insets.top + 8 }]}
-        pointerEvents="box-none"
+        style={[styles.searchOverlay, { top: insets.top + 8, pointerEvents: "box-none" }]}
       >
         <SearchBar
           value={searchQuery}
@@ -500,8 +559,7 @@ export default function MapScreen() {
       {/* Filtres catégories */}
       {!showResults && (
         <View
-          style={[styles.filterOverlay, { top: insets.top + 64 }]}
-          pointerEvents="box-none"
+          style={[styles.filterOverlay, { top: insets.top + 64, pointerEvents: "box-none" }]}
         >
           <FilterBar
             activeCategories={activeCategories}
@@ -519,8 +577,8 @@ export default function MapScreen() {
       )}
 
       {/* Invitation à zoomer */}
-      {showZoomHint && (
-        <View style={styles.zoomHint} pointerEvents="none">
+      {showZoomHint && !showResults && (
+        <View style={[styles.zoomHint, { pointerEvents: "none" }]}>
           <Text style={styles.zoomHintText}>Zoomez pour voir les restaurants</Text>
         </View>
       )}
@@ -537,7 +595,12 @@ export default function MapScreen() {
       {selectedRestaurant && (
         <RestaurantPreviewCard
           restaurant={selectedRestaurant}
-          onClose={() => setSelectedRestaurant(null)}
+          onClose={() => {
+            isRestaurantSelectedRef.current = false;
+            setSelectedRestaurant(null);
+            // cameraTarget est déjà null (timer expiré après l'animation de navigation)
+            // → la caméra est déjà libre, rien à faire ici.
+          }}
           bottomInset={insets.bottom}
         />
       )}
@@ -546,9 +609,8 @@ export default function MapScreen() {
       <Animated.View
         style={[
           styles.toast,
-          { opacity: toastOpacity, bottom: insets.bottom + 32 },
+          { opacity: toastOpacity, bottom: insets.bottom + 32, pointerEvents: "none" },
         ]}
-        pointerEvents="none"
       >
         <Text style={styles.toastText}>{toastMessage}</Text>
       </Animated.View>

@@ -6,6 +6,12 @@ import MapLibreGL from "@maplibre/maplibre-react-native";
 // MapLibre n'a pas besoin de token pour OpenStreetMap / OpenFreeMap
 MapLibreGL.setAccessToken(null);
 
+// Filtre les logs parasites : les annulations de tuiles (comportement normal au pan/zoom)
+MapLibreGL.Logger.setLogCallback((log) => {
+  if (log.message.includes("Canceled")) return true; // supprime
+  return false; // laisse passer
+});
+
 /** Gère les redirections en fonction de la session */
 function RootLayoutNav() {
   const { session, loading } = useAuth();

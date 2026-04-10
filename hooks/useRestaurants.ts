@@ -96,9 +96,9 @@ export function useRestaurants(bounds: MapBounds | null): {
       return;
     }
 
-    // Élargit la zone de 50 % pour absorber les pans sans re-requête
-    const latPad = (b.maxLat - b.minLat) * 0.5;
-    const lngPad = (b.maxLng - b.minLng) * 0.5;
+    // Élargit la zone de 80 % pour absorber les pans sans re-requête
+    const latPad = (b.maxLat - b.minLat) * 0.8;
+    const lngPad = (b.maxLng - b.minLng) * 0.8;
     const fetchBounds: CacheBounds = {
       minLat: b.minLat - latPad,
       maxLat: b.maxLat + latPad,
@@ -147,11 +147,13 @@ export function useRestaurants(bounds: MapBounds | null): {
       return;
     }
 
-    // Debounce 500ms : on attend que l'utilisateur finisse son geste
+    // Debounce 150ms : MapLibre's onRegionDidChange se déclenche déjà une seule
+    // fois par geste terminé (pas en continu), donc 150ms suffisent pour couvrir
+    // les animations et éviter les doubles appels sans ajouter de latence perceptible.
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
       fetchForBounds(bounds);
-    }, 500);
+    }, 150);
 
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);

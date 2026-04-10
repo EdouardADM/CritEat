@@ -12,6 +12,9 @@ const config = {
     ios: {
       supportsTablet: true,
       bundleIdentifier: "com.criteat.app",
+      infoPlist: {
+        ITSAppUsesNonExemptEncryption: false,
+      },
     },
     android: {
       package: "com.criteat.app",
@@ -50,6 +53,11 @@ const config = {
     experiments: {
       typedRoutes: true,
       reactCompiler: true,
+    },
+    extra: {
+      eas: {
+        projectId: "f5dcdcf1-e1f9-4727-b500-9e17238cf98f",
+      },
     },
   },
 };
