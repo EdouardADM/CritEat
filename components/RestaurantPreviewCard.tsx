@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
+import { useRouter } from "expo-router";
 import { getCategoryConfig } from "../constants/categories";
 import type { Restaurant } from "../hooks/useRestaurants";
 
@@ -11,6 +12,7 @@ type Props = {
 
 export default function RestaurantPreviewCard({ restaurant, onClose, bottomInset }: Props) {
   const config = getCategoryConfig(restaurant.category);
+  const router = useRouter();
   const translateY = useRef(new Animated.Value(200)).current;
 
   useEffect(() => {
@@ -58,6 +60,14 @@ export default function RestaurantPreviewCard({ restaurant, onClose, bottomInset
       {restaurant.review_count > 0 && (
         <Text style={styles.reviews}>{restaurant.review_count} avis</Text>
       )}
+
+      {/* Voir la fiche */}
+      <Pressable
+        style={[styles.detailBtn, { backgroundColor: config.color }]}
+        onPress={() => router.push(`/restaurant/${restaurant.id}`)}
+      >
+        <Text style={styles.detailBtnText}>Voir la fiche</Text>
+      </Pressable>
     </Animated.View>
   );
 }
@@ -129,5 +139,16 @@ const styles = StyleSheet.create({
   reviews: {
     fontSize: 12,
     color: "#aaa",
+    marginBottom: 12,
+  },
+  detailBtn: {
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: "center",
+  },
+  detailBtnText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#fff",
   },
 });
