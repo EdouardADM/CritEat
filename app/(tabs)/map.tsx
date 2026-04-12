@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Pressable,
   StyleSheet,
@@ -22,7 +23,7 @@ import {
   type SearchResult,
 } from "../../hooks/useRestaurantSearch";
 import { supabase } from "../../lib/supabase";
-import { type RestaurantCategory } from "../../constants/categories";
+import { type RestaurantCategory, getCategoryConfig } from "../../constants/categories";
 import { restaurantsToGeoJSON } from "../../utils/geo";
 
 type Coords = { latitude: number; longitude: number };
@@ -79,6 +80,23 @@ const CATEGORY_COLOR_EXPRESSION = [
   /* default */    "#6B7280",
 ];
 
+// ── Échelle de carte ──────────────────────────────────────────────────────────
+
+const SCALE_STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
+const SCALE_TARGET_PX = 80;
+
+function computeScaleBar(zoom: number, lat: number): { width: number; label: string } {
+  const metersPerPixel =
+    (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
+  const targetMeters = metersPerPixel * SCALE_TARGET_PX;
+  const distance = SCALE_STEPS.reduce((best, step) =>
+    Math.abs(step - targetMeters) < Math.abs(best - targetMeters) ? step : best
+  );
+  const width = distance / metersPerPixel;
+  const label = distance >= 1000 ? `${(distance / 1000).toFixed(1)} km` : `${distance} m`;
+  return { width, label };
+}
+
 // ── Composant ─────────────────────────────────────────────────────────────────
 
 export default function MapScreen() {
@@ -92,7 +110,7 @@ export default function MapScreen() {
 
   // ── GPS ─────────────────────────────────────────────────────────────────────
   const [userCoords, setUserCoords] = useState<Coords | null>(null);
-  const [gpsLoading, setGpsLoading] = useState(true);
+  const [locationLoading, setLocationLoading] = useState(true);
 
   // ── Carte ───────────────────────────────────────────────────────────────────
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
@@ -117,45 +135,21 @@ export default function MapScreen() {
   // ── Filtres catégories ───────────────────────────────────────────────────────
   const [activeCategories, setActiveCategories] = useState<RestaurantCategory[]>([]);
 
+  // ── Visibilité overlay (masqués par la bottom sheet en mid/full) ─────────────
+  const [filtersVisible, setFiltersVisible] = useState(true);
+  const [searchVisible, setSearchVisible]   = useState(true);
+
   // ── Fiche restaurant ────────────────────────────────────────────────────────
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
   useEffect(() => { selectedRestaurantRef.current = selectedRestaurant; }, [selectedRestaurant]);
+
+  // ── Échelle de carte ────────────────────────────────────────────────────────
+  const [scaleBar, setScaleBar] = useState(() => computeScaleBar(12, 50.8503));
 
   // ── Toast ───────────────────────────────────────────────────────────────────
   const [toastMessage, setToastMessage] = useState("");
   const toastOpacity = useRef(new Animated.Value(0)).current;
 
-  // ── Init GPS ─────────────────────────────────────────────────────────────────
-  // Stratégie deux-passes :
-  // 1. getLastKnownPositionAsync → instantané (cache OS), affiche la carte immédiatement
-  // 2. getCurrentPositionAsync   → fix précis en arrière-plan, recadre silencieusement
-  useEffect(() => {
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        setUserCoords({ latitude: 50.8503, longitude: 4.3517 });
-        setGpsLoading(false);
-        return;
-      }
-      try {
-        // Passe 1 : position en cache OS (< 50ms)
-        const last = await Location.getLastKnownPositionAsync();
-        if (last) {
-          setUserCoords({ latitude: last.coords.latitude, longitude: last.coords.longitude });
-          setGpsLoading(false);
-        }
-        // Passe 2 : fix frais en arrière-plan (quelques secondes)
-        const fresh = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        setUserCoords({ latitude: fresh.coords.latitude, longitude: fresh.coords.longitude });
-      } catch {
-        setUserCoords({ latitude: 50.8503, longitude: 4.3517 });
-      } finally {
-        setGpsLoading(false);
-      }
-    })();
-  }, []);
 
   // ── Restaurants (fetch + cache) ──────────────────────────────────────────────
   const { restaurants, loading: restaurantsLoading } = useRestaurants(mapBounds);
@@ -179,6 +173,18 @@ export default function MapScreen() {
     () => restaurantsToGeoJSON(visibleRestaurants),
     [visibleRestaurants]
   );
+
+  // GeoJSON affiché dans le ShapeSource : exclut le restaurant sélectionné
+  // (il est rendu en surbrillance via MarkerView)
+  const displayGeoJSON = useMemo(() => {
+    if (!selectedRestaurant) return restaurantsGeoJSON;
+    return {
+      ...restaurantsGeoJSON,
+      features: restaurantsGeoJSON.features.filter(
+        (f) => f.properties.place_id !== selectedRestaurant.place_id
+      ),
+    };
+  }, [restaurantsGeoJSON, selectedRestaurant]);
 
   // ── Toggle filtre catégorie ──────────────────────────────────────────────────
   const handleToggleCategory = useCallback((category: RestaurantCategory) => {
@@ -205,6 +211,22 @@ export default function MapScreen() {
   // On n'utilise PAS setCurrentZoom(state) ici : chaque re-render pousse un update
   // bridge au Camera natif qui ré-applique sa dernière cible setCamera → snap.
   // On met à jour seulement le ref + un booléen qui change rarement (hint zoom).
+  // ── Mise à jour de l'échelle en temps réel (pendant le geste) ───────────────
+  const handleScaleUpdate = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (feature: any) => {
+      const { zoomLevel, visibleBounds } = feature.properties as {
+        zoomLevel: number;
+        visibleBounds: [[number, number], [number, number]];
+      };
+      const [ne, sw] = visibleBounds;
+      requestAnimationFrame(() => {
+        setScaleBar(computeScaleBar(zoomLevel, (ne[1] + sw[1]) / 2));
+      });
+    },
+    []
+  );
+
   const handleRegionChange = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (feature: any) => {
@@ -220,6 +242,8 @@ export default function MapScreen() {
         const hint = roundedZoom < 10;
         return prev === hint ? prev : hint;
       });
+      // Échelle : mise à jour finale (sync avec les bounds)
+      setScaleBar(computeScaleBar(zoomLevel, (ne[1] + sw[1]) / 2));
       if (isRestaurantSelectedRef.current) return;
       setMapBounds({
         minLat: sw[1],
@@ -255,6 +279,64 @@ export default function MapScreen() {
   // Cleanup du timer caméra au démontage du composant
   useEffect(() => () => {
     if (cameraTimerRef.current) clearTimeout(cameraTimerRef.current);
+  }, []);
+
+  // ── Init GPS ─────────────────────────────────────────────────────────────────
+  // La carte s'affiche immédiatement (centrée sur Bruxelles).
+  // Dès que le GPS répond, on vole vers la position réelle.
+  // Timeout 8s → fallback Bruxelles + Alert.
+  useEffect(() => {
+    const BRUSSELS: [number, number] = [4.3517, 50.8503];
+    const fallback = () => {
+      moveCameraTo(BRUSSELS, 12, "flyTo", 400);
+      setUserCoords({ latitude: 50.8503, longitude: 4.3517 });
+      setLocationLoading(false);
+    };
+
+    const timeoutId = setTimeout(() => {
+      Alert.alert("Position non disponible", "Affichage centré sur Bruxelles.");
+      fallback();
+    }, 8000);
+
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        clearTimeout(timeoutId);
+        Alert.alert("Position non disponible", "Affichage centré sur Bruxelles.");
+        fallback();
+        return;
+      }
+      let hadLastKnown = false;
+      try {
+        // Passe 1 : position en cache OS (instantané)
+        const last = await Location.getLastKnownPositionAsync();
+        if (last) {
+          hadLastKnown = true;
+          clearTimeout(timeoutId);
+          const coords = { latitude: last.coords.latitude, longitude: last.coords.longitude };
+          setUserCoords(coords);
+          moveCameraTo([coords.longitude, coords.latitude], 14, "flyTo", 400);
+          setLocationLoading(false);
+        }
+        // Passe 2 : fix précis en arrière-plan
+        const fresh = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        clearTimeout(timeoutId);
+        const coords = { latitude: fresh.coords.latitude, longitude: fresh.coords.longitude };
+        setUserCoords(coords);
+        if (!hadLastKnown) {
+          moveCameraTo([coords.longitude, coords.latitude], 14, "flyTo", 400);
+          setLocationLoading(false);
+        }
+      } catch {
+        clearTimeout(timeoutId);
+        fallback();
+      }
+    })();
+
+    return () => clearTimeout(timeoutId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Tap sur un point ou cluster dans le ShapeSource ──────────────────────────
@@ -416,35 +498,14 @@ export default function MapScreen() {
   // defaultSettings mémoïsé : prop stable → le Camera natif ne reçoit pas de bridge
   // update à chaque re-render → MapLibre ne ré-applique plus sa dernière cible setCamera.
   // Doit être AVANT les early returns pour respecter les Rules of Hooks.
+  // Bruxelles par défaut — la caméra sera déplacée par moveCameraTo dès que le GPS répond
   const cameraDefaultSettings = useMemo(
     () => ({
-      centerCoordinate: [
-        userCoords?.longitude ?? 0,
-        userCoords?.latitude ?? 0,
-      ] as [number, number],
-      zoomLevel: 13,
+      centerCoordinate: [4.3517, 50.8503] as [number, number],
+      zoomLevel: 12,
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [] // intentionnellement vide : on veut le centre initial une seule fois
+    []
   );
-
-  // ── États GPS ────────────────────────────────────────────────────────────────
-  if (gpsLoading) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#E8472A" />
-        <Text style={styles.hint}>Récupération de la position…</Text>
-      </View>
-    );
-  }
-
-  if (!userCoords) {
-    return (
-      <View style={styles.centered}>
-        <Text style={styles.errorText}>Position indisponible.</Text>
-      </View>
-    );
-  }
 
   const recenterBottom = insets.bottom + (selectedRestaurant ? 170 : 32);
 
@@ -459,6 +520,7 @@ export default function MapScreen() {
         logoEnabled={false}
         attributionEnabled={true}
         attributionPosition={{ bottom: 8, left: 8 }}
+        onRegionIsChanging={handleScaleUpdate}
         onRegionDidChange={handleRegionChange}
         onPress={handleMapPress}
       >
@@ -484,7 +546,7 @@ export default function MapScreen() {
         <MapLibreGL.ShapeSource
           id="restaurants"
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          shape={restaurantsGeoJSON as any}
+          shape={displayGeoJSON as any}
           cluster={true}
           clusterRadius={50}
           clusterMaxZoomLevel={14}
@@ -502,12 +564,11 @@ export default function MapScreen() {
                 ["get", "point_count"],
                 15, 50, 20, 100, 25, 500, 35,
               ] as any,
-              circleOpacity: 0.85,
+              circleOpacity: selectedRestaurant ? 0.3 : 0.85,
               circleStrokeColor: "#FFFFFF",
               circleStrokeWidth: 2,
             }}
           />
-
 
           {/* Marqueurs individuels (cercles colorés par catégorie) */}
           <MapLibreGL.CircleLayer
@@ -525,45 +586,64 @@ export default function MapScreen() {
               ] as any,
               circleStrokeColor: "#FFFFFF",
               circleStrokeWidth: 1.5,
-              circleOpacity: 0.9,
+              circleOpacity: selectedRestaurant ? 0.3 : 0.9,
             }}
           />
         </MapLibreGL.ShapeSource>
+
+        {/* Marqueur sélectionné — rendu natif via MarkerView */}
+        {selectedRestaurant && (() => {
+          const cfg = getCategoryConfig(selectedRestaurant.category);
+          return (
+            <MapLibreGL.MarkerView
+              coordinate={[selectedRestaurant.longitude, selectedRestaurant.latitude]}
+            >
+              <View style={styles.markerContainer}>
+                <View style={[styles.markerCircle, { backgroundColor: cfg.color }]}>
+                  <Text style={styles.markerEmoji}>{cfg.emoji}</Text>
+                </View>
+                <View style={[styles.markerTail, { borderTopColor: cfg.color }]} />
+              </View>
+            </MapLibreGL.MarkerView>
+          );
+        })()}
       </MapLibreGL.MapView>
 
       {/* Backdrop : ferme la liste quand on tape la carte */}
-      {showResults && (
+      {showResults && searchVisible && (
         <Pressable
           style={[StyleSheet.absoluteFill, styles.backdrop]}
           onPress={dismissSearch}
         />
       )}
 
-      {/* Overlay recherche */}
-      <View
-        style={[styles.searchOverlay, { top: insets.top + 8, pointerEvents: "box-none" }]}
-      >
-        <SearchBar
-          value={searchQuery}
-          onChangeText={handleQueryChange}
-          onFocus={handleSearchFocus}
-          onClear={handleClear}
-          isLoading={isSearchLoading}
-        />
-        {showResults && (
-          <SearchResults
-            localResults={localResults}
-            googleResults={googleResults}
-            userLocation={userCoords}
+      {/* Overlay recherche — masqué en état full de la bottom sheet */}
+      {searchVisible && (
+        <View
+          style={[styles.searchOverlay, { top: insets.top + 8, pointerEvents: "box-none" }]}
+        >
+          <SearchBar
+            value={searchQuery}
+            onChangeText={handleQueryChange}
+            onFocus={handleSearchFocus}
+            onClear={handleClear}
             isLoading={isSearchLoading}
-            onSelectLocal={handleSelectLocal}
-            onSelectGoogle={handleSelectGoogle}
           />
-        )}
-      </View>
+          {showResults && (
+            <SearchResults
+              localResults={localResults}
+              googleResults={googleResults}
+              userLocation={userCoords}
+              isLoading={isSearchLoading}
+              onSelectLocal={handleSelectLocal}
+              onSelectGoogle={handleSelectGoogle}
+            />
+          )}
+        </View>
+      )}
 
-      {/* Filtres catégories */}
-      {!showResults && (
+      {/* Filtres catégories — masqués en état mid et full de la bottom sheet */}
+      {filtersVisible && !showResults && (
         <View
           style={[styles.filterOverlay, { top: insets.top + 64, pointerEvents: "box-none" }]}
         >
@@ -604,11 +684,44 @@ export default function MapScreen() {
           onClose={() => {
             isRestaurantSelectedRef.current = false;
             setSelectedRestaurant(null);
-            // cameraTarget est déjà null (timer expiré après l'animation de navigation)
-            // → la caméra est déjà libre, rien à faire ici.
+            // Restaure les overlays masqués par la bottom sheet
+            setFiltersVisible(true);
+            setSearchVisible(true);
           }}
           bottomInset={insets.bottom}
+          onMidExpand={() => {
+            setFiltersVisible(false);
+          }}
+          onFullExpand={() => {
+            setFiltersVisible(false);
+            setSearchVisible(false);
+          }}
+          onCollapse={() => {
+            setFiltersVisible(true);
+            setSearchVisible(true);
+          }}
         />
+      )}
+
+      {/* Échelle de carte */}
+      <View
+        style={[styles.scaleBarWrapper, { bottom: 24 + insets.bottom, left: 16 }]}
+        pointerEvents="none"
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", width: scaleBar.width }}>
+          <View style={styles.scaleBarTick} />
+          <View style={styles.scaleBarLine} />
+          <View style={styles.scaleBarTick} />
+        </View>
+        <Text style={styles.scaleBarLabel}>{scaleBar.label}</Text>
+      </View>
+
+      {/* Overlay localisation — masqué dès que la position est obtenue */}
+      {locationLoading && (
+        <View style={styles.locationOverlay} pointerEvents="none">
+          <ActivityIndicator size="large" color="#E8472A" />
+          <Text style={styles.locationOverlayText}>Localisation en cours…</Text>
+        </View>
       )}
 
       {/* Toast */}
@@ -629,20 +742,19 @@ export default function MapScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
-  centered: {
-    flex: 1,
-    backgroundColor: "#fff",
+
+  // ── Overlay localisation ───────────────────────────────────────────────────
+  locationOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 50,
+    backgroundColor: "rgba(255,255,255,0.85)",
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 32,
     gap: 12,
   },
-  hint: { color: "#888", fontSize: 14 },
-  errorText: {
-    color: "#E8472A",
-    fontSize: 15,
-    textAlign: "center",
-    lineHeight: 22,
+  locationOverlayText: {
+    color: "#555",
+    fontSize: 14,
   },
 
   // ── Recherche ──────────────────────────────────────────────────────────────
@@ -710,6 +822,67 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 6,
     zIndex: 15,
+  },
+
+  // ── Échelle de carte ──────────────────────────────────────────────────────
+  scaleBarWrapper: {
+    position: "absolute",
+    backgroundColor: "rgba(255,255,255,0.8)",
+    borderRadius: 4,
+    padding: 4,
+    alignItems: "flex-start",
+    zIndex: 15,
+  },
+  scaleBarTick: {
+    width: 2,
+    height: 8,
+    backgroundColor: "#333",
+  },
+  scaleBarLine: {
+    flex: 1,
+    height: 3,
+    backgroundColor: "#fff",
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: "#333",
+  },
+  scaleBarLabel: {
+    fontSize: 11,
+    color: "#333",
+    fontWeight: "600",
+    marginTop: 2,
+  },
+
+  // ── Marqueur sélectionné ──────────────────────────────────────────────────
+  markerContainer: {
+    alignItems: "center",
+  },
+  markerCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 3,
+    borderColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  markerEmoji: {
+    fontSize: 20,
+  },
+  markerTail: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 8,
+    borderRightWidth: 8,
+    borderTopWidth: 10,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+    marginTop: -1,
   },
 
   // ── Toast ──────────────────────────────────────────────────────────────────
