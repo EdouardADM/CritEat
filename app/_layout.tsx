@@ -1,13 +1,15 @@
 import { useEffect } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { AuthProvider, useAuth } from "../context/AuthContext";
-import MapLibreGL from "@maplibre/maplibre-react-native";
+import { LocationManager, LogManager, NetworkManager } from "@maplibre/maplibre-react-native";
 
-// MapLibre n'a pas besoin de token pour OpenStreetMap / OpenFreeMap
-MapLibreGL.setAccessToken(null);
+// Désactive le LocationManager interne de MapLibre (MLRNLocationModule).
+// La localisation est gérée exclusivement par expo-location.
+NetworkManager.setConnected(true);
+LocationManager.stop();
 
 // Filtre les logs parasites : les annulations de tuiles (comportement normal au pan/zoom)
-MapLibreGL.Logger.setLogCallback((log) => {
+LogManager.onLog((log) => {
   if (log.message.includes("Canceled")) return true; // supprime
   return false; // laisse passer
 });

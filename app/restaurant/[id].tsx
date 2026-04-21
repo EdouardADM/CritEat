@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import {
-  Alert,
   Animated,
   Linking,
   Pressable,
@@ -299,7 +298,11 @@ export default function RestaurantDetailScreen() {
       <View style={[styles.ctaContainer, { paddingBottom: 16 + insets.bottom }]}>
         <Pressable
           style={[styles.ctaBtn, { backgroundColor: coverColor }]}
-          onPress={() => Alert.alert("Bientôt disponible", "La fonctionnalité d'avis arrive prochainement !")}
+          onPress={() =>
+            router.push(
+              `/review/${detail.id}?name=${encodeURIComponent(detail.name)}&lat=0&lng=0`
+            )
+          }
         >
           <Ionicons name="create-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
           <Text style={styles.ctaBtnText}>Écrire un avis</Text>

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Alert,
   Animated,
   Dimensions,
   Linking,
@@ -13,6 +12,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { getCategoryConfig } from "../constants/categories";
 import type { Restaurant } from "../hooks/useRestaurants";
 import {
@@ -129,6 +129,7 @@ export default function RestaurantPreviewCard({
   onFullExpand,
   onCollapse,
 }: Props) {
+  const router = useRouter();
   const config = getCategoryConfig(restaurant.category);
   // topInset lu directement depuis le hook — pas besoin de le passer en prop
   const { top: topInset } = useSafeAreaInsets();
@@ -440,9 +441,8 @@ export default function RestaurantPreviewCard({
               <Pressable
                 style={[styles.ctaBtn, { backgroundColor: config.color }]}
                 onPress={() =>
-                  Alert.alert(
-                    "Bientôt disponible",
-                    "La fonctionnalité d'avis arrive prochainement !"
+                  router.push(
+                    `/review/${restaurant.id}?name=${encodeURIComponent(restaurant.name)}&lat=${restaurant.latitude}&lng=${restaurant.longitude}`
                   )
                 }
               >

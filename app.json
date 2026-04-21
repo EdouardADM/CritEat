@@ -7,12 +7,14 @@
     "icon": "./assets/images/icon.png",
     "scheme": "criteat",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "newArchEnabled": false
     },
     "android": {
       "package": "com.criteat.app",
+      "newArchEnabled": false,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -42,7 +44,14 @@
       ],
       "expo-font",
       "expo-image",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Criteat a besoin de la caméra pour photographier votre plat.",
+          "photosPermission": "Criteat a besoin d'accéder à vos photos."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

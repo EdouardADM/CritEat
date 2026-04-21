@@ -1,5 +1,6 @@
-import { Tabs } from "expo-router";
+import { Tabs, useRouter } from "expo-router";
 import { Text } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 function TabIcon({ emoji, focused }: { emoji: string; focused: boolean }) {
@@ -10,6 +11,7 @@ function TabIcon({ emoji, focused }: { emoji: string; focused: boolean }) {
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
 
   return (
     <Tabs
@@ -39,6 +41,21 @@ export default function TabsLayout() {
           tabBarIcon: ({ focused }) => (
             <TabIcon emoji="🗺️" focused={focused} />
           ),
+        }}
+      />
+      <Tabs.Screen
+        name="camera"
+        options={{
+          title: "Avis",
+          tabBarIcon: ({ focused, color }) => (
+            <Ionicons name="camera" size={24} color={color} />
+          ),
+        }}
+        listeners={{
+          tabPress: (e) => {
+            e.preventDefault();
+            router.push("/review/select");
+          },
         }}
       />
       <Tabs.Screen

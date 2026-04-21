@@ -44,6 +44,9 @@ app-example
 /ios
 /android
 
+# Claude Code
+.claude/
+
 # Overture Maps — fichiers volumineux
 scripts/bruxelles_places.geojson
 scripts/bruxelles_places.parquet
