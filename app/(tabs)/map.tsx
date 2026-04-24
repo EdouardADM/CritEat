@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  Keyboard,
   type NativeSyntheticEvent,
   Pressable,
   StyleSheet,
@@ -23,17 +24,15 @@ import {
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import SearchBar from "../../components/SearchBar";
+import SearchBar, { type SearchBarHandle } from "../../components/SearchBar";
 import SearchResults from "../../components/SearchResults";
 import RestaurantPreviewCard from "../../components/RestaurantPreviewCard";
 import FilterBar from "../../components/FilterBar";
 import { useRestaurants, type MapBounds, type Restaurant } from "../../hooks/useRestaurants";
 import {
   useRestaurantSearch,
-  type MappedGoogleResult,
   type SearchResult,
 } from "../../hooks/useRestaurantSearch";
-import { supabase } from "../../lib/supabase";
 import { type RestaurantCategory, getCategoryConfig } from "../../constants/categories";
 import { restaurantsToGeoJSON } from "../../utils/geo";
 
@@ -101,10 +100,12 @@ export default function MapScreen() {
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapRef>(null);
   const cameraRef = useRef<CameraRef>(null);
+  const searchBarRef = useRef<SearchBarHandle>(null);
 
   const isRestaurantSelectedRef = useRef(false);
   const selectedRestaurantRef = useRef<Restaurant | null>(null);
   const showResultsRef = useRef(false);
+  const ignoreNextQueryChangeRef = useRef(false);
 
   // ── GPS ─────────────────────────────────────────────────────────────────────
   const [userCoords, setUserCoords] = useState<Coords | null>(null);
@@ -145,7 +146,7 @@ export default function MapScreen() {
   const { restaurants, loading: restaurantsLoading } = useRestaurants(mapBounds);
 
   // ── Recherche (debounce 400ms) ───────────────────────────────────────────────
-  const { localResults, googleResults, isLoading: isSearchLoading } =
+  const { localResults, isLoading: isSearchLoading } =
     useRestaurantSearch(searchQuery, userCoords);
 
   // ── Filtrage + conversion GeoJSON ────────────────────────────────────────────
@@ -205,6 +206,11 @@ export default function MapScreen() {
       requestAnimationFrame(() => {
         setScaleBar(computeScaleBar(zoom, (bounds[3] + bounds[1]) / 2));
       });
+      // Ferme le clavier seulement si l'utilisateur pan/zoom manuellement
+      if (!isRestaurantSelectedRef.current) {
+        Keyboard.dismiss();
+        searchBarRef.current?.blur();
+      }
     },
     []
   );
@@ -328,7 +334,12 @@ export default function MapScreen() {
   // ── Tap sur le fond de carte → ferme la fiche ────────────────────────────────
   // v11 : onPress fournit NativeSyntheticEvent<PressEvent> avec event.nativeEvent.point = [x, y]
   const handleMapPress = useCallback(async (event: any) => {
-    if (showResultsRef.current) return;
+    if (showResultsRef.current) {
+      Keyboard.dismiss();
+      searchBarRef.current?.blur();
+      setShowResults(false);
+      return;
+    }
 
     const [screenPointX, screenPointY] = event.nativeEvent.point as [number, number];
 
@@ -360,85 +371,76 @@ export default function MapScreen() {
   }, [userCoords, moveCameraTo]);
 
   // ── Fermer la recherche ──────────────────────────────────────────────────────
-  const dismissSearch = useCallback(() => setShowResults(false), []);
+  const dismissSearch = useCallback(() => {
+    Keyboard.dismiss();
+    searchBarRef.current?.blur();
+    setShowResults(false);
+  }, []);
 
   // ── Sélection résultat local ─────────────────────────────────────────────────
   const handleSelectLocal = useCallback((result: SearchResult) => {
+    console.log("=== handleSelectLocal appelé ===");
+    console.log("result:", result.name, result.lat, result.lng);
+
+    // 1. Ferme tout d'abord — laisse React re-render sans backdrop
     setShowResults(false);
     setSearchQuery("");
-    moveCameraTo([result.longitude, result.latitude], 16, "flyTo", 400);
+    Keyboard.dismiss();
+    ignoreNextQueryChangeRef.current = true;
+    setTimeout(() => { ignoreNextQueryChangeRef.current = false; }, 1000);
+    searchBarRef.current?.blur();
+
+    console.log("showResults mis à false");
+
+    // 2. Monte la preview card après que le backdrop est démonté
+    setTimeout(() => {
+      console.log("setTimeout(0) — avant setSelectedRestaurant");
+      console.log("isRestaurantSelectedRef avant:", isRestaurantSelectedRef.current);
+
+      isRestaurantSelectedRef.current = true;
+      setSelectedRestaurant({
+        id: result.id,
+        place_id: result.place_id,
+        name: result.name,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        category: result.category as any,
+        address: result.address,
+        city: result.city,
+        latitude: result.lat,
+        longitude: result.lng,
+        composite_score: result.composite_score,
+        popularity_score: result.popularity_score,
+        review_count: result.review_count,
+      });
+      moveCameraTo([result.lng, result.lat], 16, "flyTo", 400);
+
+      console.log("setSelectedRestaurant appelé");
+      console.log("isRestaurantSelectedRef après:", isRestaurantSelectedRef.current);
+    }, 0);
+
+    // 3. Force le fetch des restaurants autour de la nouvelle position
+    setTimeout(() => {
+      console.log("setTimeout(500) — force mapBounds");
+      console.log("isRestaurantSelectedRef avant reset:", isRestaurantSelectedRef.current);
+      isRestaurantSelectedRef.current = false;
+      setMapBounds({
+        minLat: result.lat - 0.005,
+        minLng: result.lng - 0.008,
+        maxLat: result.lat + 0.005,
+        maxLng: result.lng + 0.008,
+        zoom: 16,
+      });
+      isRestaurantSelectedRef.current = true;
+      console.log("mapBounds mis à jour");
+    }, 500);
   }, [moveCameraTo]);
-
-  // ── Sélection résultat Google ────────────────────────────────────────────────
-  const handleSelectGoogle = useCallback(
-    (result: MappedGoogleResult) => {
-      setShowResults(false);
-      setSearchQuery("");
-      moveCameraTo([result.longitude, result.latitude], 16, "flyTo", 400);
-
-      // Supabase en arrière-plan (ne bloque pas l'animation)
-      void (async () => {
-        try {
-          const { data: dupData } = await supabase.rpc("find_duplicate_restaurant", {
-            search_name: result.name,
-            search_lat: result.latitude,
-            search_lng: result.longitude,
-          });
-          const duplicate = (
-            dupData as { id: string; name: string; place_id: string }[] | null
-          )?.[0];
-
-          if (duplicate) {
-            const { data: existing } = await supabase
-              .from("restaurants")
-              .select("phone, website")
-              .eq("id", duplicate.id)
-              .single();
-
-            const updates: Record<string, string> = {};
-            if (!existing?.phone && result.phone) updates.phone = result.phone;
-            if (!existing?.website && result.website) updates.website = result.website;
-
-            if (Object.keys(updates).length > 0) {
-              await supabase.from("restaurants").update(updates).eq("id", duplicate.id);
-            }
-          } else {
-            await supabase.rpc("batch_upsert_restaurants", {
-              restaurants: [
-                {
-                  place_id:        result.place_id,
-                  name:            result.name,
-                  category:        result.category,
-                  address:         result.address,
-                  city:            result.city,
-                  postcode:        result.postcode,
-                  latitude:        result.latitude,
-                  longitude:       result.longitude,
-                  phone:           result.phone,
-                  website:         result.website,
-                  opening_hours:   result.opening_hours,
-                  description:     null,
-                  takeaway:        null,
-                  delivery:        null,
-                  outdoor_seating: null,
-                  wheelchair:      null,
-                  diet_options:    null,
-                  source:          "google",
-                },
-              ],
-            });
-            showToast("Restaurant ajouté à Criteat !");
-          }
-        } catch {
-          // Dégradation silencieuse — la carte a quand même navigué
-        }
-      })();
-    },
-    [showToast, moveCameraTo]
-  );
 
   // ── Handlers recherche ───────────────────────────────────────────────────────
   const handleQueryChange = useCallback((text: string) => {
+    if (ignoreNextQueryChangeRef.current) {
+      ignoreNextQueryChangeRef.current = false;
+      return;
+    }
     setSearchQuery(text);
     setShowResults(text.trim().length >= 3);
     if (text.trim().length > 0) setSelectedRestaurant(null);
@@ -449,6 +451,8 @@ export default function MapScreen() {
   }, [searchQuery]);
 
   const handleClear = useCallback(() => {
+    Keyboard.dismiss();
+    searchBarRef.current?.blur();
     setSearchQuery("");
     setShowResults(false);
   }, []);
@@ -538,13 +542,6 @@ export default function MapScreen() {
         })()}
       </Map>
 
-      {/* Backdrop : ferme la liste quand on tape la carte */}
-      {showResults && searchVisible && (
-        <Pressable
-          style={[StyleSheet.absoluteFill, styles.backdrop]}
-          onPress={dismissSearch}
-        />
-      )}
 
       {/* Overlay recherche — masqué en état full de la bottom sheet */}
       {searchVisible && (
@@ -552,6 +549,7 @@ export default function MapScreen() {
           style={[styles.searchOverlay, { top: insets.top + 8, pointerEvents: "box-none" }]}
         >
           <SearchBar
+            ref={searchBarRef}
             value={searchQuery}
             onChangeText={handleQueryChange}
             onFocus={handleSearchFocus}
@@ -561,11 +559,8 @@ export default function MapScreen() {
           {showResults && (
             <SearchResults
               localResults={localResults}
-              googleResults={googleResults}
-              userLocation={userCoords}
               isLoading={isSearchLoading}
               onSelectLocal={handleSelectLocal}
-              onSelectGoogle={handleSelectGoogle}
             />
           )}
         </View>
@@ -633,7 +628,7 @@ export default function MapScreen() {
       )}
 
       {/* Échelle de carte */}
-      <View
+      {!selectedRestaurant && <View
         style={[styles.scaleBarWrapper, { bottom: 24 + insets.bottom, left: 16 }]}
         pointerEvents="none"
       >
@@ -643,7 +638,7 @@ export default function MapScreen() {
           <View style={styles.scaleBarTick} />
         </View>
         <Text style={styles.scaleBarLabel}>{scaleBar.label}</Text>
-      </View>
+      </View>}
 
       {/* Overlay localisation — masqué dès que la position est obtenue */}
       {locationLoading && (
@@ -687,7 +682,6 @@ const styles = StyleSheet.create({
   },
 
   // ── Recherche ──────────────────────────────────────────────────────────────
-  backdrop: { zIndex: 10 },
   searchOverlay: {
     position: "absolute",
     left: 12,

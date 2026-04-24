@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -17,7 +16,6 @@ import SearchBar from "../../components/SearchBar";
 import SearchResults from "../../components/SearchResults";
 import {
   useRestaurantSearch,
-  type MappedGoogleResult,
   type SearchResult,
 } from "../../hooks/useRestaurantSearch";
 import { supabase } from "../../lib/supabase";
@@ -31,7 +29,6 @@ export default function SelectRestaurantScreen() {
   const [query, setQuery] = useState("");
   const [showResults, setShowResults] = useState(false);
   const [userCoords, setUserCoords] = useState<UserCoords | null>(null);
-  const [upserting, setUpserting] = useState(false);
 
   // Dernière position connue pour afficher les distances (non bloquant)
   useEffect(() => {
@@ -47,7 +44,7 @@ export default function SelectRestaurantScreen() {
       .catch(() => {});
   }, []);
 
-  const { localResults, googleResults, isLoading } = useRestaurantSearch(
+  const { localResults, isLoading } = useRestaurantSearch(
     query,
     userCoords
   );
@@ -66,85 +63,13 @@ export default function SelectRestaurantScreen() {
   const handleSelectLocal = useCallback(
     (result: SearchResult) => {
       router.push(
-        `/review/${result.id}?name=${encodeURIComponent(result.name)}&lat=${result.latitude}&lng=${result.longitude}`
+        `/review/${result.id}?name=${encodeURIComponent(result.name)}&lat=0&lng=0`
       );
     },
     [router]
   );
 
   // Résultat Google → upsert si nécessaire, puis récupère l'id DB
-  const handleSelectGoogle = useCallback(
-    async (result: MappedGoogleResult) => {
-      setUpserting(true);
-      try {
-        // Cherche un doublon existant
-        const { data: dupData } = await supabase.rpc(
-          "find_duplicate_restaurant",
-          {
-            search_name: result.name,
-            search_lat: result.latitude,
-            search_lng: result.longitude,
-          }
-        );
-        const dup = (
-          dupData as { id: string; name: string; place_id: string }[] | null
-        )?.[0];
-
-        if (dup) {
-          router.push(
-            `/review/${dup.id}?name=${encodeURIComponent(dup.name)}&lat=${result.latitude}&lng=${result.longitude}`
-          );
-          return;
-        }
-
-        // Insère le restaurant Google en DB
-        await supabase.rpc("batch_upsert_restaurants", {
-          restaurants: [
-            {
-              place_id: result.place_id,
-              name: result.name,
-              category: result.category,
-              address: result.address,
-              city: result.city,
-              postcode: result.postcode,
-              latitude: result.latitude,
-              longitude: result.longitude,
-              phone: result.phone,
-              website: result.website,
-              opening_hours: result.opening_hours,
-              description: null,
-              takeaway: null,
-              delivery: null,
-              outdoor_seating: null,
-              wheelchair: null,
-              diet_options: null,
-              source: "google",
-            },
-          ],
-        });
-
-        // Récupère l'id assigné
-        const { data: newRow } = await supabase
-          .from("restaurants")
-          .select("id, name")
-          .eq("place_id", result.place_id)
-          .single();
-
-        if (newRow) {
-          router.push(
-            `/review/${newRow.id}?name=${encodeURIComponent(newRow.name)}&lat=${result.latitude}&lng=${result.longitude}`
-          );
-        }
-      } catch {
-        // Dégradation silencieuse — le flow est annulé, l'utilisateur
-        // peut relancer la recherche
-      } finally {
-        setUpserting(false);
-      }
-    },
-    [router]
-  );
-
   return (
     <KeyboardAvoidingView
       style={styles.root}
@@ -176,11 +101,9 @@ export default function SelectRestaurantScreen() {
         {showResults && (
           <SearchResults
             localResults={localResults}
-            googleResults={googleResults}
             userLocation={userCoords}
             isLoading={isLoading}
             onSelectLocal={handleSelectLocal}
-            onSelectGoogle={handleSelectGoogle}
           />
         )}
 
@@ -191,13 +114,7 @@ export default function SelectRestaurantScreen() {
         )}
       </View>
 
-      {/* Overlay pendant l'upsert Google */}
-      {upserting && (
-        <View style={styles.upsertOverlay}>
-          <ActivityIndicator size="large" color="#E8472A" />
-          <Text style={styles.upsertText}>Chargement…</Text>
-        </View>
-      )}
+
     </KeyboardAvoidingView>
   );
 }
@@ -240,18 +157,5 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 14,
     color: "#aaa",
-  },
-
-  // ── Overlay upsert ───────────────────────────────────────────────────────────
-  upsertOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(255,255,255,0.88)",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-  },
-  upsertText: {
-    fontSize: 14,
-    color: "#555",
   },
 });

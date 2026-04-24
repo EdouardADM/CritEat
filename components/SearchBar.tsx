@@ -1,4 +1,4 @@
-import React, { useRef } from "react";
+import React, { forwardRef, useImperativeHandle, useRef } from "react";
 import {
   ActivityIndicator,
   Platform,
@@ -17,14 +17,19 @@ type Props = {
   isLoading: boolean;
 };
 
-export default function SearchBar({
-  value,
-  onChangeText,
-  onFocus,
-  onClear,
-  isLoading,
-}: Props) {
+export type SearchBarHandle = {
+  blur: () => void;
+};
+
+const SearchBar = forwardRef<SearchBarHandle, Props>(function SearchBar(
+  { value, onChangeText, onFocus, onClear, isLoading },
+  ref,
+) {
   const inputRef = useRef<TextInput>(null);
+
+  useImperativeHandle(ref, () => ({
+    blur: () => inputRef.current?.blur(),
+  }));
 
   return (
     <View style={styles.bar}>
@@ -61,7 +66,9 @@ export default function SearchBar({
       ) : null}
     </View>
   );
-}
+});
+
+export default SearchBar;
 
 const styles = StyleSheet.create({
   bar: {
