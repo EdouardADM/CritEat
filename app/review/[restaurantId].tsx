@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -19,6 +19,7 @@ import StepComment from "../../components/review/StepComment";
 import StepConfirm from "../../components/review/StepConfirm";
 import { useReviewDraft } from "../../hooks/useReviewDraft";
 import { usePublishReview } from "../../hooks/usePublishReview";
+import { useMyReviewForRestaurant } from "../../hooks/useMyReviewForRestaurant";
 import type { ScoreKey } from "../../components/review/StepScores";
 
 // ── Constantes ────────────────────────────────────────────────────────────────
@@ -34,26 +35,59 @@ export default function ReviewScreen() {
     name?: string;
     lat?: string;
     lng?: string;
+    editId?: string;
   }>();
   const restaurantId   = params.restaurantId;
-  const restaurantName = params.name ? decodeURIComponent(params.name) : "Restaurant";
-  const restaurantLat  = params.lat  ? parseFloat(params.lat)  : null;
-  const restaurantLng  = params.lng  ? parseFloat(params.lng)  : null;
+  const restaurantName = params.name   ? decodeURIComponent(params.name) : "Restaurant";
+  const restaurantLat  = params.lat    ? parseFloat(params.lat)  : null;
+  const restaurantLng  = params.lng    ? parseFloat(params.lng)  : null;
+  const editId         = params.editId ?? null;
+  const isEditMode     = !!editId;
 
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const { draft, loaded, updateDraft, clearDraft } = useReviewDraft(restaurantId);
+  const { draft, loaded, updateDraft, clearDraft } = useReviewDraft(
+    restaurantId,
+    isEditMode ? "edit" : "create",
+  );
   const { publish, publishing } = usePublishReview();
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
 
-  // Restaure le step si un draft existe (reprise d'un flow en cours)
+  // Charge l'avis existant uniquement en mode édition
+  const { myReview: existingReview, loading: existingLoading } =
+    useMyReviewForRestaurant(isEditMode ? restaurantId : null);
+
+  // Mode édition : pré-remplit le draft depuis le serveur (une seule fois)
+  const editSeededRef = useRef(false);
   useEffect(() => {
-    if (!loaded) return;
+    if (!isEditMode || !existingReview || editSeededRef.current) return;
+    editSeededRef.current = true;
+    const serverPhotos = existingReview.review_photos.map((p) => p.url);
+    updateDraft({
+      restaurantId,
+      restaurantName,
+      photos:         serverPhotos,
+      originalPhotos: serverPhotos,
+      scoreQp:        existingReview.score_qp,
+      scoreAmbiance:  existingReview.score_ambiance,
+      scoreService:   existingReview.score_service,
+      scoreFood:      existingReview.score_food,
+      comment:        existingReview.comment ?? "",
+      mode:           "edit",
+      reviewId:       editId!,
+      step:           1,
+    });
+    setStep(1);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditMode, existingReview]);
+
+  // Mode création : restaure le step si un draft existe
+  useEffect(() => {
+    if (isEditMode || !loaded) return;
     if (draft) {
       setStep(draft.step);
     } else {
-      // Premier lancement : initialise le draft
       updateDraft({ restaurantId, restaurantName, step: 1 });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,7 +138,7 @@ export default function ReviewScreen() {
   const isNextEnabled = (() => {
     if (!draft) return false;
     switch (step) {
-      case 1: return !!draft.photoUri;
+      case 1: return draft.photos.length > 0;
       case 2: return (
         draft.scoreQp       != null &&
         draft.scoreAmbiance != null &&
@@ -117,8 +151,12 @@ export default function ReviewScreen() {
   })();
 
   // ── Chargement initial ─────────────────────────────────────────────────────
+  // Création : attend AsyncStorage | Édition : attend le serveur + seeding
+  const isReady = isEditMode
+    ? (!existingLoading && draft !== null)
+    : loaded;
 
-  if (!loaded) {
+  if (!isReady) {
     return (
       <View style={[styles.root, styles.centered]}>
         <ActivityIndicator size="large" color="#E8472A" />
@@ -167,18 +205,20 @@ export default function ReviewScreen() {
         ))}
       </View>
 
-      {/* Nom du restaurant */}
+      {/* Nom du restaurant + mode */}
       <Text style={styles.subtitle} numberOfLines={1}>
-        {restaurantName}
+        {isEditMode ? `Modifier · ${restaurantName}` : restaurantName}
       </Text>
 
       {/* Contenu du step courant */}
       <View style={styles.content}>
         {step === 1 && (
           <StepPhoto
-            photoUri={draft?.photoUri ?? null}
-            onPhoto={(uri) => updateDraft({ photoUri: uri })}
-            onRetake={() => updateDraft({ photoUri: null })}
+            photos={draft?.photos ?? []}
+            onAddPhoto={(uri) => updateDraft({ photos: [...(draft?.photos ?? []), uri] })}
+            onRemovePhoto={(index) =>
+              updateDraft({ photos: (draft?.photos ?? []).filter((_, i) => i !== index) })
+            }
           />
         )}
         {step === 2 && (

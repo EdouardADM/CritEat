@@ -61,8 +61,8 @@ export default function StepConfirm({ draft, restaurantName }: Props) {
     >
       {/* Photo + nom du restaurant */}
       <View style={styles.topRow}>
-        {draft.photoUri && (
-          <Image source={{ uri: draft.photoUri }} style={styles.thumb} />
+        {draft.photos?.[0] && (
+          <Image source={{ uri: draft.photos[0] }} style={styles.thumb} />
         )}
         <View style={styles.restaurantInfo}>
           <Text style={styles.restaurantName} numberOfLines={2}>

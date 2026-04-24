@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Animated,
+  Image,
   Linking,
   Pressable,
   ScrollView,
@@ -17,6 +18,8 @@ import {
   avgScore,
   type ReviewDetail,
 } from "../../hooks/useRestaurantDetail";
+import { useMyReviewForRestaurant } from "../../hooks/useMyReviewForRestaurant";
+import ReviewPhotosModal from "../../components/ReviewPhotosModal";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -121,6 +124,7 @@ export default function RestaurantDetailScreen() {
   const insets = useSafeAreaInsets();
 
   const { restaurant: detail, reviews, loading, error } = useRestaurantDetail(id ?? null);
+  const { myReview, loading: myReviewLoading } = useMyReviewForRestaurant(id ?? null);
 
   if (loading) return <SkeletonScreen insets={insets} />;
 
@@ -296,17 +300,32 @@ export default function RestaurantDetailScreen() {
 
       {/* ── Bouton fixe ───────────────────────────────────────────────────── */}
       <View style={[styles.ctaContainer, { paddingBottom: 16 + insets.bottom }]}>
-        <Pressable
-          style={[styles.ctaBtn, { backgroundColor: coverColor }]}
-          onPress={() =>
-            router.push(
-              `/review/${detail.id}?name=${encodeURIComponent(detail.name)}&lat=0&lng=0`
-            )
-          }
-        >
-          <Ionicons name="create-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
-          <Text style={styles.ctaBtnText}>Écrire un avis</Text>
-        </Pressable>
+        {(() => {
+          const baseUrl = `/review/${detail.id}?name=${encodeURIComponent(detail.name)}&lat=0&lng=0`;
+          const isEdit = !!myReview;
+          const ctaUrl = isEdit ? `${baseUrl}&editId=${myReview!.id}` : baseUrl;
+          return (
+            <Pressable
+              style={[
+                styles.ctaBtn,
+                { backgroundColor: coverColor },
+                myReviewLoading && { opacity: 0.55 },
+              ]}
+              onPress={() => router.push(ctaUrl)}
+              disabled={myReviewLoading}
+            >
+              <Ionicons
+                name={isEdit ? "pencil-outline" : "create-outline"}
+                size={18}
+                color="#fff"
+                style={{ marginRight: 8 }}
+              />
+              <Text style={styles.ctaBtnText}>
+                {isEdit ? "Modifier mon avis" : "Écrire un avis"}
+              </Text>
+            </Pressable>
+          );
+        })()}
       </View>
     </View>
   );
@@ -315,6 +334,8 @@ export default function RestaurantDetailScreen() {
 // ── ReviewCard ────────────────────────────────────────────────────────────────
 
 function ReviewCard({ review, accentColor }: { review: ReviewDetail; accentColor: string }) {
+  const [photosModalVisible, setPhotosModalVisible] = useState(false);
+
   const initials = review.username
     .split(" ")
     .map((w) => w[0])
@@ -329,7 +350,9 @@ function ReviewCard({ review, accentColor }: { review: ReviewDetail; accentColor
         <View style={[styles.avatar, { backgroundColor: accentColor + "20" }]}>
           <Text style={[styles.avatarText, { color: accentColor }]}>{initials}</Text>
         </View>
-        <View style={{ flex: 1 }}>
+
+        {/* Nom + date + score pill — occupe tout l'espace disponible */}
+        <View style={styles.reviewMeta}>
           <View style={styles.reviewNameRow}>
             <Text style={styles.reviewUsername}>{review.username}</Text>
             {review.is_verified && (
@@ -339,12 +362,43 @@ function ReviewCard({ review, accentColor }: { review: ReviewDetail; accentColor
               </View>
             )}
           </View>
-          <Text style={styles.reviewDate}>{formatDate(review.created_at)}</Text>
-        </View>
-        {review.global_score != null && (
-          <View style={[styles.reviewScoreBubble, { backgroundColor: accentColor }]}>
-            <Text style={styles.reviewScoreBubbleText}>{review.global_score.toFixed(1)}</Text>
+          <View style={styles.reviewSubRow}>
+            <Text style={styles.reviewDate}>{formatDate(review.created_at)}</Text>
+            {new Date(review.updated_at).getTime() -
+              new Date(review.created_at).getTime() > 2000 && (
+              <Text style={styles.reviewEdited}>(modifié)</Text>
+            )}
+            {review.global_score != null && (
+              <View style={[styles.reviewScorePill, { backgroundColor: accentColor + "18" }]}>
+                <Ionicons name="star" size={10} color={accentColor} />
+                <Text style={[styles.reviewScorePillText, { color: accentColor }]}>
+                  {review.global_score.toFixed(1)}
+                </Text>
+              </View>
+            )}
           </View>
+        </View>
+
+        {/* Vignette photo — droite du header */}
+        {review.review_photos.length > 0 && (
+          <Pressable
+            style={styles.reviewPhotoThumb}
+            onPress={() => setPhotosModalVisible(true)}
+            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+          >
+            <Image
+              source={{ uri: review.review_photos[0].url }}
+              style={styles.reviewPhotoImage}
+              resizeMode="cover"
+            />
+            {review.review_photos.length > 1 && (
+              <View style={styles.reviewPhotoBadge}>
+                <Text style={styles.reviewPhotoBadgeText}>
+                  +{review.review_photos.length - 1}
+                </Text>
+              </View>
+            )}
+          </Pressable>
         )}
       </View>
 
@@ -366,6 +420,15 @@ function ReviewCard({ review, accentColor }: { review: ReviewDetail; accentColor
       {/* Commentaire */}
       {!!review.comment && (
         <Text style={styles.reviewComment}>{review.comment}</Text>
+      )}
+
+      {/* Modal carrousel photos */}
+      {review.review_photos.length > 0 && (
+        <ReviewPhotosModal
+          visible={photosModalVisible}
+          photos={review.review_photos}
+          onClose={() => setPhotosModalVisible(false)}
+        />
       )}
     </View>
   );
@@ -630,6 +693,54 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     gap: 10,
     marginBottom: 10,
+    minHeight: 52, // réserve la hauteur pour la vignette photo (3.2)
+  },
+  reviewMeta: {
+    flex: 1,
+  },
+  reviewSubRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 2,
+  },
+  reviewScorePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  reviewScorePillText: {
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  reviewPhotoThumb: {
+    width: 76,
+    height: 76,
+    borderRadius: 10,
+    overflow: "hidden",
+    backgroundColor: "#f0f0f0",
+    flexShrink: 0,
+  },
+  reviewPhotoImage: {
+    width: "100%",
+    height: "100%",
+  },
+  reviewPhotoBadge: {
+    position: "absolute",
+    bottom: 6,
+    right: 6,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  reviewPhotoBadgeText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700",
   },
   avatar: {
     width: 36,
@@ -667,17 +778,10 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: "#aaa",
   },
-  reviewScoreBubble: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  reviewScoreBubbleText: {
-    fontSize: 12,
-    fontWeight: "800",
-    color: "#fff",
+  reviewEdited: {
+    fontSize: 10,
+    color: "#bbb",
+    fontStyle: "italic",
   },
   reviewMiniScores: {
     flexDirection: "row",

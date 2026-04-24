@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
 import {
   ActivityIndicator,
   Alert,
@@ -593,13 +594,14 @@ export default function MapScreen() {
         </View>
       )}
 
-      {/* Bouton recentrer */}
-      <Pressable
-        style={[styles.recenterBtn, { bottom: recenterBottom }]}
-        onPress={handleRecenter}
-      >
-        <Ionicons name="locate" size={22} color="#E8472A" />
-      </Pressable>
+      {!showResults && !selectedRestaurant && (
+        <Pressable
+          style={[styles.recenterBtn, { bottom: recenterBottom }]}
+          onPress={handleRecenter}
+        >
+          <Ionicons name="locate" size={22} color="#E8472A" />
+        </Pressable>
+      )}
 
       {/* Preview restaurant au tap */}
       {selectedRestaurant && (

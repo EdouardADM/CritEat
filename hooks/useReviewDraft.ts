@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 export type ReviewDraft = {
   restaurantId: string;
   restaurantName: string;
-  photoUri: string | null;
+  photos: string[];
   scoreQp: number | null;
   scoreAmbiance: number | null;
   scoreService: number | null;
@@ -14,6 +14,10 @@ export type ReviewDraft = {
   comment: string;
   step: 1 | 2 | 3 | 4;
   savedAt: string; // ISO — auto-expire après 7 jours
+  // ── Mode édition ────────────────────────────────────────────────────────────
+  mode?: "create" | "edit";  // absent → rétrocompat "create"
+  reviewId?: string;         // id de l'avis à modifier
+  originalPhotos?: string[]; // URLs serveur au moment du chargement (pour le diff)
 };
 
 // ── Constantes ────────────────────────────────────────────────────────────────
@@ -24,21 +28,31 @@ const storageKey = (restaurantId: string) => `@criteat_draft_${restaurantId}`;
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
-export function useReviewDraft(restaurantId: string): {
+export function useReviewDraft(
+  restaurantId: string,
+  mode: "create" | "edit" = "create",
+): {
   draft: ReviewDraft | null;
   loaded: boolean;
   updateDraft: (partial: Partial<ReviewDraft>) => void;
   clearDraft: () => void;
 } {
   const [draft, setDraft] = useState<ReviewDraft | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  // En mode édition, pas d'AsyncStorage → "chargé" immédiatement
+  const [loaded, setLoaded] = useState(mode === "edit");
 
-  // Charge le draft existant au mount
+  // Charge le draft existant au mount — ignoré en mode édition
   useEffect(() => {
+    if (mode === "edit") return;
     AsyncStorage.getItem(storageKey(restaurantId))
       .then((raw) => {
         if (raw) {
-          const parsed: ReviewDraft = JSON.parse(raw);
+          const parsed = JSON.parse(raw) as ReviewDraft & { photoUri?: string | null };
+          // Rétrocompat : ancien draft avec photoUri au lieu de photos
+          if (!Array.isArray(parsed.photos)) {
+            parsed.photos = parsed.photoUri ? [parsed.photoUri] : [];
+            delete parsed.photoUri;
+          }
           const age = Date.now() - new Date(parsed.savedAt).getTime();
           if (age < TTL_MS) {
             setDraft(parsed);
@@ -50,7 +64,7 @@ export function useReviewDraft(restaurantId: string): {
       })
       .catch(() => {})
       .finally(() => setLoaded(true));
-  }, [restaurantId]);
+  }, [restaurantId, mode]);
 
   const updateDraft = useCallback(
     (partial: Partial<ReviewDraft>) => {
@@ -58,7 +72,7 @@ export function useReviewDraft(restaurantId: string): {
         const base: ReviewDraft = prev ?? {
           restaurantId,
           restaurantName: "",
-          photoUri: null,
+          photos: [],
           scoreQp: null,
           scoreAmbiance: null,
           scoreService: null,
@@ -72,17 +86,22 @@ export function useReviewDraft(restaurantId: string): {
           ...partial,
           savedAt: new Date().toISOString(),
         };
-        void AsyncStorage.setItem(storageKey(restaurantId), JSON.stringify(next));
+        // Pas de persistance AsyncStorage en mode édition
+        if (mode !== "edit") {
+          void AsyncStorage.setItem(storageKey(restaurantId), JSON.stringify(next));
+        }
         return next;
       });
     },
-    [restaurantId]
+    [restaurantId, mode]
   );
 
   const clearDraft = useCallback(() => {
     setDraft(null);
-    void AsyncStorage.removeItem(storageKey(restaurantId));
-  }, [restaurantId]);
+    if (mode !== "edit") {
+      void AsyncStorage.removeItem(storageKey(restaurantId));
+    }
+  }, [restaurantId, mode]);
 
   return { draft, loaded, updateDraft, clearDraft };
 }

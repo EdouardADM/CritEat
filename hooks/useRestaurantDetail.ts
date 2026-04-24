@@ -11,7 +11,8 @@ export type ReviewDetail = {
   comment: string | null;
   is_verified: boolean;
   created_at: string;
-  photo_url: string | null;
+  updated_at: string;
+  review_photos: { url: string; position: number }[];
   score_qp: number | null;
   score_ambiance: number | null;
   score_service: number | null;
@@ -103,8 +104,8 @@ export function useRestaurantDetail(restaurantId: string | null): {
           .from("reviews")
           .select(
             "id, user_id, score_qp, score_ambiance, score_service, score_food, " +
-            "global_score, comment, is_verified, created_at, photo_url, " +
-            "users(username, avatar_url)"
+            "global_score, comment, is_verified, created_at, updated_at, " +
+            "review_photos(url, position), users(username, avatar_url)"
           )
           .eq("restaurant_id", restaurantId)
           .order("created_at", { ascending: false })
@@ -125,7 +126,10 @@ export function useRestaurantDetail(restaurantId: string | null): {
             comment:       row.comment,
             is_verified:   row.is_verified ?? false,
             created_at:    row.created_at,
-            photo_url:     row.photo_url ?? null,
+            updated_at:    row.updated_at,
+            review_photos: (row.review_photos ?? []).sort(
+              (a: { position: number }, b: { position: number }) => a.position - b.position
+            ),
             score_qp:      row.score_qp,
             score_ambiance: row.score_ambiance,
             score_service:  row.score_service,
