@@ -316,8 +316,15 @@ export default function MapScreen() {
   }, []);
 
   // ── Tap sur un restaurant dans le GeoJSONSource ──────────────────────────────
+  // Si une preview est déjà ouverte → ferme d'abord (l'utilisateur tape à nouveau
+  // pour ouvrir la nouvelle). Évite le remplacement direct, plus prévisible.
   const handleRestaurantPress = useCallback((feature: any) => {
     if (!feature) return;
+    if (selectedRestaurantRef.current) {
+      isRestaurantSelectedRef.current = false;
+      setSelectedRestaurant(null);
+      return;
+    }
     const props = feature.properties;
     const [lng, lat] = feature.geometry.coordinates as [number, number];
     isRestaurantSelectedRef.current = true;
@@ -615,17 +622,6 @@ export default function MapScreen() {
             setSearchVisible(true);
           }}
           bottomInset={insets.bottom}
-          onMidExpand={() => {
-            setFiltersVisible(false);
-          }}
-          onFullExpand={() => {
-            setFiltersVisible(false);
-            setSearchVisible(false);
-          }}
-          onCollapse={() => {
-            setFiltersVisible(true);
-            setSearchVisible(true);
-          }}
         />
       )}
 

@@ -160,7 +160,7 @@ export default function RestaurantDetailScreen() {
       {/* ── Cover + back ──────────────────────────────────────────────────── */}
       <View style={[styles.cover, { backgroundColor: coverColor, paddingTop: insets.top }]}>
         <Pressable
-          style={styles.backBtn}
+          style={[styles.backBtn, { top: insets.top + 8 }]}
           onPress={() => router.back()}
           hitSlop={12}
         >
@@ -455,7 +455,6 @@ const styles = StyleSheet.create({
   },
   backBtn: {
     position: "absolute",
-    top: 12,
     left: 16,
     width: 36,
     height: 36,
