@@ -438,6 +438,15 @@ export default function RestaurantPreviewCard({
 
             {/* Bouton fixe en bas — hors du ScrollView */}
             <View style={[styles.ctaContainer, { paddingBottom: 12 + bottomInset }]}>
+              {isFull && (
+                <Pressable
+                  style={[styles.ctaBtn, styles.ctaBtnSecondary, { borderColor: config.color }]}
+                  onPress={() => router.push(`/restaurant/${restaurant.id}`)}
+                >
+                  <Text style={[styles.ctaBtnText, { color: config.color }]}>Voir la fiche complète</Text>
+                  <Ionicons name="chevron-forward" size={15} color={config.color} style={{ marginLeft: 4 }} />
+                </Pressable>
+              )}
               <Pressable
                 style={[styles.ctaBtn, { backgroundColor: config.color }]}
                 onPress={() =>
@@ -810,6 +819,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+  },
+  ctaBtnSecondary: {
+    backgroundColor: "transparent",
+    borderWidth: 1.5,
+    marginBottom: 8,
   },
   ctaBtnText: {
     fontSize: 14,
