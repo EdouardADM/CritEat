@@ -10,7 +10,11 @@
     "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
-      "newArchEnabled": false
+      "newArchEnabled": false,
+      "bundleIdentifier": "com.criteat.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Criteat utilise votre position pour vous montrer les restaurants à proximité et vérifier votre présence lors de la publication d'un avis."
+      }
     },
     "android": {
       "package": "com.criteat.app",
