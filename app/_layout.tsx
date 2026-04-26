@@ -1,12 +1,7 @@
 import { useEffect } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { AuthProvider, useAuth } from "../context/AuthContext";
-import { LocationManager, LogManager, NetworkManager } from "@maplibre/maplibre-react-native";
-
-// Désactive le LocationManager interne de MapLibre (MLRNLocationModule).
-// La localisation est gérée exclusivement par expo-location.
-NetworkManager.setConnected(true);
-LocationManager.stop();
+import { LogManager } from "@maplibre/maplibre-react-native";
 
 // Filtre les logs parasites : les annulations de tuiles (comportement normal au pan/zoom)
 LogManager.onLog((log) => {

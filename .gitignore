@@ -51,3 +51,12 @@ app-example
 scripts/bruxelles_places.geojson
 scripts/bruxelles_places.parquet
 scripts/.env
+
+
+# IDE
+.vscode/
+.idea/
+
+# Logs et dumps
+*.log
+crashlog.*
