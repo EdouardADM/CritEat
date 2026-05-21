@@ -43,6 +43,8 @@ export type RestaurantDetail = {
   wheelchair: boolean | null;
   diet_options: string[] | null;
   price_range: number | null;
+  lat: number | null;
+  lng: number | null;
 };
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
@@ -67,35 +69,12 @@ export function useRestaurantDetail(restaurantId: string | null): {
       setLoading(true);
       setError(null);
 
-      console.log("[useRestaurantDetail] restaurantId reçu :", restaurantId);
-
       try {
-        // ── Sanity check : 3 premières lignes de la table ────────────────────
-        const { data: sampleData, error: sampleError } = await supabase
-          .from("restaurants")
-          .select("id, name")
-          .limit(3);
-        console.log("[useRestaurantDetail] sample restaurants →", sampleData, "err →", sampleError);
+        // ── 1. Détail du restaurant (via RPC pour extraire lat/lng depuis geography) ──
+        const { data: rpcData, error: restaurantError } = await supabase
+          .rpc("get_restaurant_detail", { p_id: restaurantId });
 
-        // ── 1. Détail du restaurant ──────────────────────────────────────────
-        const restaurantQuery = supabase
-          .from("restaurants")
-          .select(
-            "id, name, category, address, city, postcode, " +
-            "phone, website, opening_hours, description, " +
-            "composite_score, score_qp, score_ambiance, score_service, score_food, " +
-            "review_count, takeaway, delivery, outdoor_seating, wheelchair, " +
-            "diet_options, price_range"
-          )
-          .eq("id", restaurantId)
-          .single();
-
-        console.log("[useRestaurantDetail] requête restaurant : restaurants?id=eq." + restaurantId);
-
-        const { data: restaurantData, error: restaurantError } = await restaurantQuery;
-
-        console.log("[useRestaurantDetail] restaurantData →", restaurantData);
-        console.log("[useRestaurantDetail] restaurantError →", restaurantError);
+        const restaurantData = rpcData?.[0] ?? null;
 
         if (restaurantError) throw restaurantError;
 

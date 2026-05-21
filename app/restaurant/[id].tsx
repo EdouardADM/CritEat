@@ -20,6 +20,8 @@ import {
 } from "../../hooks/useRestaurantDetail";
 import { useMyReviewForRestaurant } from "../../hooks/useMyReviewForRestaurant";
 import ReviewPhotosModal from "../../components/ReviewPhotosModal";
+import { checkDistanceToRestaurant, type DistanceCheckResult } from "../../hooks/useDistanceCheck";
+import DistanceGateModal from "../../components/review/DistanceGateModal";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -125,6 +127,53 @@ export default function RestaurantDetailScreen() {
 
   const { restaurant: detail, reviews, loading, error } = useRestaurantDetail(id ?? null);
   const { myReview, loading: myReviewLoading } = useMyReviewForRestaurant(id ?? null);
+
+  // ── Gate de distance ───────────────────────────────────────────────────────
+  const [gateVisible, setGateVisible]     = useState(false);
+  const [gateChecking, setGateChecking]   = useState(false);
+  const [gateResult, setGateResult]       = useState<DistanceCheckResult | null>(null);
+  const [gateRetryCount, setGateRetryCount] = useState(0);
+
+  const runGateCheck = async () => {
+    if (!detail) return;
+    setGateChecking(true);
+    setGateVisible(true);
+    const result = await checkDistanceToRestaurant(
+      detail.lat ?? 0,
+      detail.lng ?? 0,
+    );
+    setGateChecking(false);
+    if (result.status === "in_range") {
+      setGateVisible(false);
+      setGateResult(null);
+      const distParam = result.distance_m != null ? `&gateDist=${result.distance_m}` : "";
+      const accParam  = result.accuracy_m  != null ? `&gateAcc=${result.accuracy_m}`  : "";
+      router.push(
+        `/review/${detail.id}?name=${encodeURIComponent(detail.name)}&lat=${detail.lat ?? 0}&lng=${detail.lng ?? 0}${distParam}${accParam}` as any,
+      );
+    } else {
+      setGateResult(result);
+    }
+  };
+
+  const handleReviewPress = async () => {
+    if (!detail) return;
+    const isEdit = !!myReview;
+    if (isEdit) {
+      // Mode édition : pas de gate
+      router.push(
+        `/review/${detail.id}?name=${encodeURIComponent(detail.name)}&lat=${detail.lat ?? 0}&lng=${detail.lng ?? 0}&editId=${myReview!.id}` as any,
+      );
+      return;
+    }
+    setGateRetryCount(0);
+    await runGateCheck();
+  };
+
+  const handleGateRetry = async () => {
+    setGateRetryCount((c) => c + 1);
+    await runGateCheck();
+  };
 
   if (loading) return <SkeletonScreen insets={insets} />;
 
@@ -301,18 +350,16 @@ export default function RestaurantDetailScreen() {
       {/* ── Bouton fixe ───────────────────────────────────────────────────── */}
       <View style={[styles.ctaContainer, { paddingBottom: 16 + insets.bottom }]}>
         {(() => {
-          const baseUrl = `/review/${detail.id}?name=${encodeURIComponent(detail.name)}&lat=0&lng=0`;
           const isEdit = !!myReview;
-          const ctaUrl = isEdit ? `${baseUrl}&editId=${myReview!.id}` : baseUrl;
           return (
             <Pressable
               style={[
                 styles.ctaBtn,
                 { backgroundColor: coverColor },
-                myReviewLoading && { opacity: 0.55 },
+                (myReviewLoading || gateChecking) && { opacity: 0.55 },
               ]}
-              onPress={() => router.push(ctaUrl)}
-              disabled={myReviewLoading}
+              onPress={handleReviewPress}
+              disabled={myReviewLoading || gateChecking}
             >
               <Ionicons
                 name={isEdit ? "pencil-outline" : "create-outline"}
@@ -327,6 +374,17 @@ export default function RestaurantDetailScreen() {
           );
         })()}
       </View>
+
+      {/* ── Gate de distance ──────────────────────────────────────────────── */}
+      <DistanceGateModal
+        visible={gateVisible}
+        result={gateResult}
+        restaurantName={detail.name}
+        onRetry={handleGateRetry}
+        onClose={() => { setGateVisible(false); setGateResult(null); }}
+        retryCount={gateRetryCount}
+        checking={gateChecking}
+      />
     </View>
   );
 }

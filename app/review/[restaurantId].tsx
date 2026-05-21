@@ -36,6 +36,8 @@ export default function ReviewScreen() {
     lat?: string;
     lng?: string;
     editId?: string;
+    gateDist?: string;
+    gateAcc?: string;
   }>();
   const restaurantId   = params.restaurantId;
   const restaurantName = params.name   ? decodeURIComponent(params.name) : "Restaurant";
@@ -43,6 +45,8 @@ export default function ReviewScreen() {
   const restaurantLng  = params.lng    ? parseFloat(params.lng)  : null;
   const editId         = params.editId ?? null;
   const isEditMode     = !!editId;
+  const gateDistParam  = params.gateDist ? parseFloat(params.gateDist) : null;
+  const gateAccParam   = params.gateAcc  ? parseFloat(params.gateAcc)  : null;
 
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -82,13 +86,17 @@ export default function ReviewScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEditMode, existingReview]);
 
-  // Mode création : restaure le step si un draft existe
+  // Mode création : restaure le step si un draft existe + persiste la mesure gate
   useEffect(() => {
     if (isEditMode || !loaded) return;
     if (draft) {
       setStep(draft.step);
     } else {
       updateDraft({ restaurantId, restaurantName, step: 1 });
+    }
+    // Écrit la distance gate dans le draft (une seule fois à l'entrée du flow)
+    if (gateDistParam !== null) {
+      updateDraft({ gateDistance: gateDistParam, gateAccuracy: gateAccParam });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded]);
@@ -215,9 +223,17 @@ export default function ReviewScreen() {
         {step === 1 && (
           <StepPhoto
             photos={draft?.photos ?? []}
-            onAddPhoto={(uri) => updateDraft({ photos: [...(draft?.photos ?? []), uri] })}
+            onAddPhoto={(uri, location) =>
+              updateDraft({
+                photos:        [...(draft?.photos ?? []), uri],
+                photoLocations: [...(draft?.photoLocations ?? []), location],
+              })
+            }
             onRemovePhoto={(index) =>
-              updateDraft({ photos: (draft?.photos ?? []).filter((_, i) => i !== index) })
+              updateDraft({
+                photos:        (draft?.photos ?? []).filter((_, i) => i !== index),
+                photoLocations: (draft?.photoLocations ?? []).filter((_, i) => i !== index),
+              })
             }
           />
         )}

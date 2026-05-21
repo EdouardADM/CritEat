@@ -146,14 +146,14 @@ export function usePublishReview(): {
           console.error("[usePublishReview] delete review_photos error:", deleteErr);
 
         // 4. Uploader les nouvelles photos locales + ré-insérer toutes
-        const finalPhotos: { url: string; position: number }[] = [];
+        const finalPhotos: { url: string; position: number; location: import("./useCurrentPosition").CapturedLocation | null }[] = [];
         for (let i = 0; i < draft.photos.length; i++) {
           const uri = draft.photos[i];
           try {
             const url = isLocalUri(uri)
               ? await uploadPhoto(user.id, draft.restaurantId, uri, i)
               : uri;
-            finalPhotos.push({ url, position: i });
+            finalPhotos.push({ url, position: i, location: draft.photoLocations?.[i] ?? null });
           } catch (e) {
             console.error(`[usePublishReview] photo ${i} upload error:`, e);
             // on continue avec les autres photos
@@ -165,9 +165,12 @@ export function usePublishReview(): {
             .from("review_photos")
             .insert(
               finalPhotos.map((p) => ({
-                review_id: draft.reviewId!,
-                url:       p.url,
-                position:  p.position,
+                review_id:               draft.reviewId!,
+                url:                     p.url,
+                position:                p.position,
+                captured_at_location:    p.location ? `POINT(${p.location.lng} ${p.location.lat})` : null,
+                captured_at_accuracy_m:  p.location?.accuracy ?? null,
+                captured_at_timestamp:   p.location?.timestamp ?? null,
               })),
             );
           if (insertPhotosErr)
@@ -200,7 +203,7 @@ export function usePublishReview(): {
         const uploadedPhotos = await Promise.all(
           draft.photos.map(async (photoUri, index) => {
             const url = await uploadPhoto(user.id, draft.restaurantId, photoUri, index);
-            return { url, position: index };
+            return { url, position: index, location: draft.photoLocations?.[index] ?? null };
           }),
         );
 
@@ -208,14 +211,16 @@ export function usePublishReview(): {
         const { data: createdReview, error: insertError } = await supabase
           .from("reviews")
           .insert({
-            restaurant_id:  draft.restaurantId,
-            user_id:        user.id,
-            score_qp:       draft.scoreQp,
-            score_ambiance: draft.scoreAmbiance,
-            score_service:  draft.scoreService,
-            score_food:     draft.scoreFood,
-            comment:        draft.comment,
-            is_verified:    isVerified,
+            restaurant_id:              draft.restaurantId,
+            user_id:                    user.id,
+            score_qp:                   draft.scoreQp,
+            score_ambiance:             draft.scoreAmbiance,
+            score_service:              draft.scoreService,
+            score_food:                 draft.scoreFood,
+            comment:                    draft.comment,
+            is_verified:                isVerified,
+            published_from_distance_m:  draft.gateDistance ?? null,
+            published_from_accuracy_m:  draft.gateAccuracy ?? null,
           })
           .select("id")
           .single();
@@ -226,9 +231,12 @@ export function usePublishReview(): {
           .from("review_photos")
           .insert(
             uploadedPhotos.map((p) => ({
-              review_id: createdReview.id,
-              url:       p.url,
-              position:  p.position,
+              review_id:               createdReview.id,
+              url:                     p.url,
+              position:                p.position,
+              captured_at_location:    p.location ? `POINT(${p.location.lng} ${p.location.lat})` : null,
+              captured_at_accuracy_m:  p.location?.accuracy ?? null,
+              captured_at_timestamp:   p.location?.timestamp ?? null,
             })),
           );
         if (photosError)

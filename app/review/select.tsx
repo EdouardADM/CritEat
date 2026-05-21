@@ -19,6 +19,8 @@ import {
   type SearchResult,
 } from "../../hooks/useRestaurantSearch";
 import { supabase } from "../../lib/supabase";
+import { checkDistanceToRestaurant, type DistanceCheckResult } from "../../hooks/useDistanceCheck";
+import DistanceGateModal from "../../components/review/DistanceGateModal";
 
 type UserCoords = { latitude: number; longitude: number };
 
@@ -29,6 +31,13 @@ export default function SelectRestaurantScreen() {
   const [query, setQuery] = useState("");
   const [showResults, setShowResults] = useState(false);
   const [userCoords, setUserCoords] = useState<UserCoords | null>(null);
+
+  // ── Gate de distance ───────────────────────────────────────────────────────
+  const [gateVisible, setGateVisible]       = useState(false);
+  const [gateChecking, setGateChecking]     = useState(false);
+  const [gateResult, setGateResult]         = useState<DistanceCheckResult | null>(null);
+  const [gateRetryCount, setGateRetryCount] = useState(0);
+  const [gatePendingResult, setGatePendingResult] = useState<SearchResult | null>(null);
 
   // Dernière position connue pour afficher les distances (non bloquant)
   useEffect(() => {
@@ -59,15 +68,43 @@ export default function SelectRestaurantScreen() {
     setShowResults(false);
   }, []);
 
+  const runSelectGateCheck = useCallback(
+    async (result: SearchResult, retryCount: number) => {
+      setGatePendingResult(result);
+      setGateChecking(true);
+      setGateVisible(true);
+      const check = await checkDistanceToRestaurant(result.lat, result.lng);
+      setGateChecking(false);
+      if (check.status === "in_range") {
+        setGateVisible(false);
+        setGateResult(null);
+        setGatePendingResult(null);
+        const distParam = check.distance_m != null ? `&gateDist=${check.distance_m}` : "";
+        const accParam  = check.accuracy_m  != null ? `&gateAcc=${check.accuracy_m}`  : "";
+        router.push(
+          `/review/${result.id}?name=${encodeURIComponent(result.name)}&lat=${result.lat}&lng=${result.lng}${distParam}${accParam}` as any,
+        );
+      } else {
+        setGateResult(check);
+        setGateRetryCount(retryCount);
+      }
+    },
+    [router],
+  );
+
   // Résultat local → id + coordonnées disponibles directement
   const handleSelectLocal = useCallback(
     (result: SearchResult) => {
-      router.push(
-        `/review/${result.id}?name=${encodeURIComponent(result.name)}&lat=0&lng=0`
-      );
+      void runSelectGateCheck(result, 0);
     },
-    [router]
+    [runSelectGateCheck],
   );
+
+  const handleGateRetry = useCallback(() => {
+    if (!gatePendingResult) return;
+    const next = gateRetryCount + 1;
+    void runSelectGateCheck(gatePendingResult, next);
+  }, [gatePendingResult, gateRetryCount, runSelectGateCheck]);
 
   // Résultat Google → upsert si nécessaire, puis récupère l'id DB
   return (
@@ -115,6 +152,16 @@ export default function SelectRestaurantScreen() {
       </View>
 
 
+      {/* ── Gate de distance ──────────────────────────────────────────────── */}
+      <DistanceGateModal
+        visible={gateVisible}
+        result={gateResult}
+        restaurantName={gatePendingResult?.name ?? ""}
+        onRetry={handleGateRetry}
+        onClose={() => { setGateVisible(false); setGateResult(null); setGatePendingResult(null); }}
+        retryCount={gateRetryCount}
+        checking={gateChecking}
+      />
     </KeyboardAvoidingView>
   );
 }

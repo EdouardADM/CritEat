@@ -5,7 +5,9 @@
       "Bash(npm install:*)",
       "Bash(find C:UsersSuperSmallWolfEcoleTFECritEat/app -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\))",
       "Bash(find C:UsersSuperSmallWolfEcoleTFECritEat/hooks -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\))",
-      "Bash(find C:UsersSuperSmallWolfEcoleTFECritEat/components -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\))"
+      "Bash(find C:UsersSuperSmallWolfEcoleTFECritEat/components -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\))",
+      "Bash(grep -n \"lat\\\\|lng\\\\|location\\\\|coord\\\\|detail\\\\.\" app/restaurant/[id].tsx)",
+      "Bash(echo \"exit:$?\")"
     ]
   }
 }

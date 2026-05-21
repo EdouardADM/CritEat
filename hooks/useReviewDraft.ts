@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useState } from "react";
+import type { CapturedLocation } from "./useCurrentPosition";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -7,6 +8,12 @@ export type ReviewDraft = {
   restaurantId: string;
   restaurantName: string;
   photos: string[];
+  /** Position GPS au moment du pick, indexée comme photos[]. null = permission refusée. */
+  photoLocations?: (CapturedLocation | null)[];
+  /** Distance mesurée au gate de distance (avant ouverture du flow). null = hors flow ou legacy. */
+  gateDistance?: number | null;
+  /** Précision GPS au gate de distance, en mètres. */
+  gateAccuracy?: number | null;
   scoreQp: number | null;
   scoreAmbiance: number | null;
   scoreService: number | null;

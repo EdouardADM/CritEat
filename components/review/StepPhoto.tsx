@@ -7,10 +7,12 @@
 import { Alert, Image, Pressable, StyleSheet, Text, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { Ionicons } from "@expo/vector-icons";
+import { getCurrentPosition } from "../../hooks/useCurrentPosition";
+import type { CapturedLocation } from "../../hooks/useCurrentPosition";
 
 type Props = {
   photos: string[];
-  onAddPhoto: (uri: string) => void;
+  onAddPhoto: (uri: string, location: CapturedLocation | null) => void;
   onRemovePhoto: (index: number) => void;
 };
 
@@ -30,9 +32,13 @@ export default function StepPhoto({ photos, onAddPhoto, onRemovePhoto }: Props) 
       );
       return;
     }
-    const result = await ImagePicker.launchCameraAsync(CAMERA_OPTIONS);
+    // Lance le GPS en parallèle de l'ouverture caméra — les deux ont leur propre timeout
+    const [result, location] = await Promise.all([
+      ImagePicker.launchCameraAsync(CAMERA_OPTIONS),
+      getCurrentPosition(),
+    ]);
     if (!result.canceled) {
-      onAddPhoto(result.assets[0].uri);
+      onAddPhoto(result.assets[0].uri, location);
     }
   };
 
