@@ -17,6 +17,8 @@ const config = {
       bundleIdentifier: "com.criteat.app",
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false,
+        NSLocationWhenInUseUsageDescription:
+          "Criteat utilise votre position pour vous montrer les restaurants à proximité et vérifier votre présence lors de la publication d'un avis.",
       },
     },
     android: {
@@ -52,6 +54,22 @@ const config = {
       "expo-font",
       "expo-image",
       "expo-web-browser",
+      [
+        "expo-image-picker",
+        {
+          cameraPermission:
+            "Criteat a besoin de la caméra pour photographier votre plat.",
+          photosPermission:
+            "Criteat a besoin d'accéder à vos photos.",
+        },
+      ],
+      [
+        "expo-location",
+        {
+          locationWhenInUsePermission:
+            "Criteat utilise votre position pour vous montrer les restaurants à proximité et vérifier votre présence lors de la publication d'un avis.",
+        },
+      ],
     ],
     experiments: {
       typedRoutes: true,
