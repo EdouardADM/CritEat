@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
 // ── Types exportés ────────────────────────────────────────────────────────────
@@ -8,6 +8,7 @@ export type ReviewDetail = {
   user_id: string;
   username: string;
   avatar_url: string | null;
+  karma_tier: string;
   comment: string | null;
   is_verified: boolean;
   created_at: string;
@@ -18,6 +19,9 @@ export type ReviewDetail = {
   score_service: number | null;
   score_food: number | null;
   global_score: number | null;
+  upvotes: number;
+  downvotes: number;
+  my_vote: 1 | -1 | null; // vote de l'utilisateur courant sur cet avis
 };
 
 export type RestaurantDetail = {
@@ -54,85 +58,97 @@ export function useRestaurantDetail(restaurantId: string | null): {
   reviews: ReviewDetail[];
   loading: boolean;
   error: string | null;
+  refetch: () => Promise<void>;
 } {
   const [restaurant, setRestaurant] = useState<RestaurantDetail | null>(null);
   const [reviews, setReviews] = useState<ReviewDetail[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!restaurantId) return;
 
-    let cancelled = false;
+    setLoading(true);
+    setError(null);
 
-    (async () => {
-      setLoading(true);
-      setError(null);
+    try {
+      // ── 1. Détail du restaurant (via RPC pour extraire lat/lng depuis geography) ──
+      const { data: rpcData, error: restaurantError } = await supabase
+        .rpc("get_restaurant_detail", { p_id: restaurantId });
 
-      try {
-        // ── 1. Détail du restaurant (via RPC pour extraire lat/lng depuis geography) ──
-        const { data: rpcData, error: restaurantError } = await supabase
-          .rpc("get_restaurant_detail", { p_id: restaurantId });
+      const restaurantData = rpcData?.[0] ?? null;
 
-        const restaurantData = rpcData?.[0] ?? null;
+      if (restaurantError) throw restaurantError;
 
-        if (restaurantError) throw restaurantError;
+      // ── 2. 20 derniers avis avec join sur public.users ───────────────────
+      const { data: reviewsData, error: reviewsError } = await supabase
+        .from("reviews")
+        .select(
+          "id, user_id, score_qp, score_ambiance, score_service, score_food, " +
+          "global_score, comment, is_verified, created_at, updated_at, upvotes, downvotes, " +
+          "review_photos(url, position), users(username, avatar_url, karma_tier)"
+        )
+        .eq("restaurant_id", restaurantId)
+        .order("created_at", { ascending: false })
+        .limit(20);
 
-        // ── 2. 20 derniers avis avec join sur public.users ───────────────────
-        const { data: reviewsData, error: reviewsError } = await supabase
-          .from("reviews")
-          .select(
-            "id, user_id, score_qp, score_ambiance, score_service, score_food, " +
-            "global_score, comment, is_verified, created_at, updated_at, " +
-            "review_photos(url, position), users(username, avatar_url)"
-          )
-          .eq("restaurant_id", restaurantId)
-          .order("created_at", { ascending: false })
-          .limit(20);
+      if (reviewsError) throw reviewsError;
 
-        console.log("[useRestaurantDetail] reviews (join users) →", reviewsData, "err →", reviewsError);
-
-        if (reviewsError) throw reviewsError;
-
-        if (!cancelled) {
-          setRestaurant(restaurantData as unknown as RestaurantDetail);
-
-          const mapped: ReviewDetail[] = (reviewsData ?? []).map((row: any) => ({
-            id:            row.id,
-            user_id:       row.user_id,
-            username:      row.users?.username ?? "Utilisateur",
-            avatar_url:    row.users?.avatar_url ?? null,
-            comment:       row.comment,
-            is_verified:   row.is_verified ?? false,
-            created_at:    row.created_at,
-            updated_at:    row.updated_at,
-            review_photos: (row.review_photos ?? []).sort(
-              (a: { position: number }, b: { position: number }) => a.position - b.position
-            ),
-            score_qp:      row.score_qp,
-            score_ambiance: row.score_ambiance,
-            score_service:  row.score_service,
-            score_food:     row.score_food,
-            global_score:   row.global_score,
-          }));
-
-          setReviews(mapped);
+      // ── 3. Votes de l'utilisateur courant sur ces avis ───────────────────
+      const reviewIds = (reviewsData ?? []).map((r: any) => r.id);
+      const myVotes: Record<string, 1 | -1> = {};
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && reviewIds.length > 0) {
+        const { data: votesData } = await supabase
+          .from("votes")
+          .select("review_id, value")
+          .eq("user_id", user.id)
+          .in("review_id", reviewIds);
+        for (const v of votesData ?? []) {
+          myVotes[v.review_id] = v.value as 1 | -1;
         }
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.error("[useRestaurantDetail] ERREUR :", e);
-        if (!cancelled) {
-          setError(msg);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
       }
-    })();
 
-    return () => { cancelled = true; };
+      setRestaurant(restaurantData as unknown as RestaurantDetail);
+
+      const mapped: ReviewDetail[] = (reviewsData ?? []).map((row: any) => ({
+        id:            row.id,
+        user_id:       row.user_id,
+        username:      row.users?.username ?? "Utilisateur",
+        avatar_url:    row.users?.avatar_url ?? null,
+        karma_tier:    row.users?.karma_tier ?? "novice",
+        comment:       row.comment,
+        is_verified:   row.is_verified ?? false,
+        created_at:    row.created_at,
+        updated_at:    row.updated_at,
+        review_photos: (row.review_photos ?? []).sort(
+          (a: { position: number }, b: { position: number }) => a.position - b.position
+        ),
+        score_qp:      row.score_qp,
+        score_ambiance: row.score_ambiance,
+        score_service:  row.score_service,
+        score_food:     row.score_food,
+        global_score:   row.global_score,
+        upvotes:        row.upvotes ?? 0,
+        downvotes:      row.downvotes ?? 0,
+        my_vote:        myVotes[row.id] ?? null,
+      }));
+
+      setReviews(mapped);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[useRestaurantDetail] ERREUR :", e);
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
   }, [restaurantId]);
 
-  return { restaurant, reviews, loading, error };
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return { restaurant, reviews, loading, error, refetch: load };
 }
 
 // ── Utilitaire : moyenne d'une dimension sur les avis ─────────────────────────

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -12,16 +13,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../context/AuthContext";
 import { useUserProfile } from "../hooks/useUserProfile";
+import KarmaBadge from "./KarmaBadge";
+import KarmaInfoModal from "./KarmaInfoModal";
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
 const ACCENT = "#E8472A";
-
-const KARMA_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
-  novice:            { label: "Novice",            color: "#9CA3AF", icon: "leaf-outline"    },
-  confirmed_critic:  { label: "Critique confirmé", color: "#3B82F6", icon: "ribbon-outline"  },
-  local_expert:      { label: "Expert local",      color: "#F59E0B", icon: "trophy-outline"  },
-};
 
 const CATEGORY_FR: Record<string, string> = {
   french:        "française",
@@ -75,6 +72,8 @@ export default function ProfileView({ userId }: { userId: string }) {
 
   const { profile, loading, error, refetch } = useUserProfile(userId);
 
+  const [infoVisible, setInfoVisible] = useState(false);
+
   const isSelf = authUser?.id === userId;
 
   // ── Loading ───────────────────────────────────────────────────────────────
@@ -103,13 +102,13 @@ export default function ProfileView({ userId }: { userId: string }) {
     );
   }
 
-  const karma = KARMA_CONFIG[profile.karma_tier] ?? KARMA_CONFIG.novice;
   const catLabel = profile.favorite_category
     ? CATEGORY_FR[profile.favorite_category] ?? profile.favorite_category
     : null;
 
   // ── Rendu ─────────────────────────────────────────────────────────────────
   return (
+    <>
     <ScrollView
       style={styles.scroll}
       contentContainerStyle={[
@@ -133,10 +132,15 @@ export default function ProfileView({ userId }: { userId: string }) {
 
         <Text style={styles.username}>{profile.username}</Text>
 
-        {/* Karma tier badge */}
-        <View style={[styles.karmaBadge, { backgroundColor: karma.color + "18", borderColor: karma.color + "40" }]}>
-          <Ionicons name={karma.icon as any} size={13} color={karma.color} />
-          <Text style={[styles.karmaBadgeText, { color: karma.color }]}>{karma.label}</Text>
+        {/* Karma tier badge + info */}
+        <View style={styles.karmaRow}>
+          <KarmaBadge tier={profile.karma_tier} />
+          <Pressable
+            onPress={() => setInfoVisible(true)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons name="information-circle-outline" size={20} color="#9CA3AF" />
+          </Pressable>
         </View>
 
         {/* Bio */}
@@ -151,7 +155,7 @@ export default function ProfileView({ userId }: { userId: string }) {
       {/* ── Stats 4 colonnes ──────────────────────────────────────────────── */}
       <View style={styles.statsCard}>
         {[
-          { value: profile.karma_score.toFixed(1), label: "Karma"   },
+          { value: String(Math.round(profile.karma_score)), label: "Karma"   },
           { value: String(profile.review_count),   label: "Avis"    },
           { value: String(profile.unique_restaurants_count), label: "Restos" },
           { value: String(profile.total_photos_count),       label: "Photos" },
@@ -237,6 +241,9 @@ export default function ProfileView({ userId }: { userId: string }) {
         )}
       </View>
     </ScrollView>
+
+    <KarmaInfoModal visible={infoVisible} onClose={() => setInfoVisible(false)} />
+    </>
   );
 }
 
@@ -303,18 +310,10 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#1a1a1a",
   },
-  karmaBadge: {
+  karmaRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 20,
-    borderWidth: 1,
-  },
-  karmaBadgeText: {
-    fontSize: 12,
-    fontWeight: "600",
+    gap: 6,
   },
   bio: {
     fontSize: 14,

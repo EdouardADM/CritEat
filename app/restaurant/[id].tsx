@@ -15,11 +15,13 @@ import { Ionicons } from "@expo/vector-icons";
 import { getCategoryConfig } from "../../constants/categories";
 import {
   useRestaurantDetail,
-  avgScore,
   type ReviewDetail,
 } from "../../hooks/useRestaurantDetail";
 import { useMyReviewForRestaurant } from "../../hooks/useMyReviewForRestaurant";
+import { useReviewVote, type VoteValue } from "../../hooks/useReviewVote";
+import { useAuth } from "../../context/AuthContext";
 import ReviewPhotosModal from "../../components/ReviewPhotosModal";
+import KarmaBadge from "../../components/KarmaBadge";
 import { checkDistanceToRestaurant, type DistanceCheckResult } from "../../hooks/useDistanceCheck";
 import DistanceGateModal from "../../components/review/DistanceGateModal";
 
@@ -125,8 +127,10 @@ export default function RestaurantDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const { restaurant: detail, reviews, loading, error } = useRestaurantDetail(id ?? null);
+  const { restaurant: detail, reviews, loading, error, refetch } = useRestaurantDetail(id ?? null);
   const { myReview, loading: myReviewLoading } = useMyReviewForRestaurant(id ?? null);
+  const { user } = useAuth();
+  const currentUserId = user?.id ?? null;
 
   // ── Gate de distance ───────────────────────────────────────────────────────
   const [gateVisible, setGateVisible]     = useState(false);
@@ -193,11 +197,13 @@ export default function RestaurantDetailScreen() {
   const config = getCategoryConfig(detail.category);
   const coverColor = config.color;
 
+  // Sous-scores pondérés par karma, fournis tels quels par get_restaurant_detail
+  // (aucun recalcul client).
   const dimensions = [
-    { label: "Qualité/Prix", icon: "pricetag-outline" as const, value: avgScore(reviews, "score_qp") },
-    { label: "Ambiance",     icon: "flame-outline" as const,    value: avgScore(reviews, "score_ambiance") },
-    { label: "Service",      icon: "happy-outline" as const,    value: avgScore(reviews, "score_service") },
-    { label: "Assiette",     icon: "restaurant-outline" as const, value: avgScore(reviews, "score_food") },
+    { label: "Qualité/Prix", icon: "pricetag-outline" as const, value: detail.score_qp },
+    { label: "Ambiance",     icon: "flame-outline" as const,    value: detail.score_ambiance },
+    { label: "Service",      icon: "happy-outline" as const,    value: detail.score_service },
+    { label: "Assiette",     icon: "restaurant-outline" as const, value: detail.score_food },
   ];
 
   const openingDays = detail.opening_hours
@@ -341,7 +347,13 @@ export default function RestaurantDetailScreen() {
             </View>
           ) : (
             reviews.map((review) => (
-              <ReviewCard key={review.id} review={review} accentColor={coverColor} />
+              <ReviewCard
+                key={review.id}
+                review={review}
+                accentColor={coverColor}
+                currentUserId={currentUserId}
+                onVoted={refetch}
+              />
             ))
           )}
         </View>
@@ -391,8 +403,63 @@ export default function RestaurantDetailScreen() {
 
 // ── ReviewCard ────────────────────────────────────────────────────────────────
 
-function ReviewCard({ review, accentColor }: { review: ReviewDetail; accentColor: string }) {
+function ReviewCard({
+  review,
+  accentColor,
+  currentUserId,
+  onVoted,
+}: {
+  review: ReviewDetail;
+  accentColor: string;
+  currentUserId: string | null;
+  onVoted: () => void;
+}) {
   const [photosModalVisible, setPhotosModalVisible] = useState(false);
+  const { toggleVote, submitting } = useReviewVote();
+
+  // État local optimiste, resynchronisé sur les valeurs serveur après refetch.
+  const [myVote, setMyVote] = useState<VoteValue | null>(review.my_vote);
+  const [upvotes, setUpvotes] = useState(review.upvotes);
+  const [downvotes, setDownvotes] = useState(review.downvotes);
+
+  useEffect(() => {
+    setMyVote(review.my_vote);
+    setUpvotes(review.upvotes);
+    setDownvotes(review.downvotes);
+  }, [review.my_vote, review.upvotes, review.downvotes]);
+
+  const isOwnReview = currentUserId != null && review.user_id === currentUserId;
+  const canVote = currentUserId != null && !isOwnReview;
+
+  const handleVote = async (next: VoteValue) => {
+    if (!canVote || submitting) return;
+
+    const prev = { myVote, upvotes, downvotes };
+    const resulting: VoteValue | null = myVote === next ? null : next;
+
+    // Mise à jour optimiste des compteurs.
+    let up = upvotes;
+    let down = downvotes;
+    if (myVote === 1) up -= 1;
+    if (myVote === -1) down -= 1;
+    if (resulting === 1) up += 1;
+    if (resulting === -1) down += 1;
+
+    setMyVote(resulting);
+    setUpvotes(up);
+    setDownvotes(down);
+
+    try {
+      await toggleVote(review.id, next, myVote);
+      onVoted(); // réconcilie compteurs (recalculés serveur) et karma auteur
+    } catch (e) {
+      // Revert en cas d'échec.
+      setMyVote(prev.myVote);
+      setUpvotes(prev.upvotes);
+      setDownvotes(prev.downvotes);
+      console.error("[ReviewCard] vote échoué :", e);
+    }
+  };
 
   const initials = review.username
     .split(" ")
@@ -413,6 +480,7 @@ function ReviewCard({ review, accentColor }: { review: ReviewDetail; accentColor
         <View style={styles.reviewMeta}>
           <View style={styles.reviewNameRow}>
             <Text style={styles.reviewUsername}>{review.username}</Text>
+            <KarmaBadge tier={review.karma_tier} size="sm" />
             {review.is_verified && (
               <View style={styles.verifiedBadge}>
                 <Ionicons name="checkmark-circle" size={12} color="#16A34A" />
@@ -479,6 +547,43 @@ function ReviewCard({ review, accentColor }: { review: ReviewDetail; accentColor
       {!!review.comment && (
         <Text style={styles.reviewComment}>{review.comment}</Text>
       )}
+
+      {/* Votes */}
+      <View style={styles.voteRow}>
+        <Pressable
+          style={[styles.voteBtn, myVote === 1 && styles.voteBtnUp]}
+          onPress={() => handleVote(1)}
+          disabled={!canVote || submitting}
+          hitSlop={6}
+        >
+          <Ionicons
+            name={myVote === 1 ? "thumbs-up" : "thumbs-up-outline"}
+            size={15}
+            color={myVote === 1 ? "#16A34A" : "#888"}
+          />
+          <Text style={[styles.voteCount, myVote === 1 && { color: "#16A34A" }]}>
+            {upvotes}
+          </Text>
+        </Pressable>
+
+        <Pressable
+          style={[styles.voteBtn, myVote === -1 && styles.voteBtnDown]}
+          onPress={() => handleVote(-1)}
+          disabled={!canVote || submitting}
+          hitSlop={6}
+        >
+          <Ionicons
+            name={myVote === -1 ? "thumbs-down" : "thumbs-down-outline"}
+            size={15}
+            color={myVote === -1 ? "#EF4444" : "#888"}
+          />
+          <Text style={[styles.voteCount, myVote === -1 && { color: "#EF4444" }]}>
+            {downvotes}
+          </Text>
+        </Pressable>
+
+        {isOwnReview && <Text style={styles.voteHint}>Votre avis</Text>}
+      </View>
 
       {/* Modal carrousel photos */}
       {review.review_photos.length > 0 && (
@@ -813,6 +918,7 @@ const styles = StyleSheet.create({
   reviewNameRow: {
     flexDirection: "row",
     alignItems: "center",
+    flexWrap: "wrap",
     gap: 6,
     marginBottom: 2,
   },
@@ -820,6 +926,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     color: "#1a1a1a",
+    flexShrink: 1,
   },
   verifiedBadge: {
     flexDirection: "row",
@@ -859,6 +966,40 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#555",
     lineHeight: 20,
+  },
+
+  // ── Votes ────────────────────────────────────────────────────────────────
+  voteRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 12,
+  },
+  voteBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: "#F3F4F6",
+  },
+  voteBtnUp: {
+    backgroundColor: "#16A34A18",
+  },
+  voteBtnDown: {
+    backgroundColor: "#EF444418",
+  },
+  voteCount: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#888",
+  },
+  voteHint: {
+    fontSize: 12,
+    color: "#aaa",
+    fontStyle: "italic",
+    marginLeft: "auto",
   },
 
   // ── CTA ────────────────────────────────────────────────────────────────────

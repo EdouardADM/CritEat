@@ -42,8 +42,8 @@ export function useMyReviewForRestaurant(restaurantId: string | null): {
           .from("reviews")
           .select(
             "id, user_id, score_qp, score_ambiance, score_service, score_food, " +
-            "global_score, comment, is_verified, created_at, updated_at, " +
-            "review_photos(url, position), users(username, avatar_url)"
+            "global_score, comment, is_verified, created_at, updated_at, upvotes, downvotes, " +
+            "review_photos(url, position), users(username, avatar_url, karma_tier)"
           )
           .eq("restaurant_id", restaurantId)
           .eq("user_id", user.id)
@@ -58,6 +58,7 @@ export function useMyReviewForRestaurant(restaurantId: string | null): {
               user_id:        data.user_id,
               username:       (data.users as any)?.username ?? "Moi",
               avatar_url:     (data.users as any)?.avatar_url ?? null,
+              karma_tier:     (data.users as any)?.karma_tier ?? "novice",
               comment:        data.comment,
               is_verified:    data.is_verified ?? false,
               created_at:     data.created_at,
@@ -71,6 +72,9 @@ export function useMyReviewForRestaurant(restaurantId: string | null): {
               score_service:  data.score_service,
               score_food:     data.score_food,
               global_score:   data.global_score,
+              upvotes:        (data as any).upvotes ?? 0,
+              downvotes:      (data as any).downvotes ?? 0,
+              my_vote:        null,
             });
           } else {
             setMyReview(null);

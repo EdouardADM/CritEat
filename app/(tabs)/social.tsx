@@ -8,19 +8,12 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useUserList, type UserListItem } from "../../hooks/useUserList";
-
-// ── Karma tier ────────────────────────────────────────────────────────────────
-
-const KARMA_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
-  novice:           { label: "Novice",            color: "#9CA3AF", icon: "leaf-outline"   },
-  confirmed_critic: { label: "Critique confirmé", color: "#3B82F6", icon: "ribbon-outline" },
-  local_expert:     { label: "Expert local",      color: "#F59E0B", icon: "trophy-outline" },
-};
+import { getKarma } from "../../constants/karma";
 
 // ── Composant ligne utilisateur ───────────────────────────────────────────────
 
 function UserRow({ item }: { item: UserListItem }) {
-  const karma = KARMA_CONFIG[item.karma_tier] ?? KARMA_CONFIG.novice;
+  const karma = getKarma(item.karma_tier);
   const initials = item.username.slice(0, 2).toUpperCase();
 
   return (
