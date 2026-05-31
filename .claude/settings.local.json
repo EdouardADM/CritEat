@@ -7,7 +7,16 @@
       "Bash(find C:UsersSuperSmallWolfEcoleTFECritEat/hooks -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\))",
       "Bash(find C:UsersSuperSmallWolfEcoleTFECritEat/components -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\))",
       "Bash(grep -n \"lat\\\\|lng\\\\|location\\\\|coord\\\\|detail\\\\.\" app/restaurant/[id].tsx)",
-      "Bash(echo \"exit:$?\")"
+      "Bash(echo \"exit:$?\")",
+      "Bash(git -C /Users/edouardadam/Ecole/TFE/CritEat ls-files -- ios/)",
+      "Bash(git -C /Users/edouardadam/Ecole/TFE/CritEat check-ignore ios/)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(git:*)",
+      "Bash(eas --version)",
+      "Bash(npx eas:*)",
+      "Bash(eas whoami:*)",
+      "Bash(eas build:*)",
+      "Bash(find:*)"
     ]
   }
 }

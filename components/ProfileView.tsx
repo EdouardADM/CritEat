@@ -213,6 +213,14 @@ export default function ProfileView({ userId }: { userId: string }) {
               <Ionicons name="pencil-outline" size={16} color="#fff" style={{ marginRight: 6 }} />
               <Text style={styles.btnPrimaryText}>Modifier mon profil</Text>
             </Pressable>
+            <Pressable style={styles.btnSecondary} onPress={() => router.push("/data")}>
+              <Ionicons name="shield-checkmark-outline" size={16} color={ACCENT} style={{ marginRight: 6 }} />
+              <Text style={styles.btnSecondaryText}>Mes données</Text>
+            </Pressable>
+            <Pressable style={styles.btnSecondary} onPress={() => router.push("/account")}>
+              <Ionicons name="settings-outline" size={16} color={ACCENT} style={{ marginRight: 6 }} />
+              <Text style={styles.btnSecondaryText}>Gestion du compte</Text>
+            </Pressable>
             <Pressable style={styles.btnSignOut} onPress={signOut}>
               <Text style={styles.btnSignOutText}>Se déconnecter</Text>
             </Pressable>
@@ -442,6 +450,21 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 15,
     fontWeight: "700",
+  },
+  btnSecondary: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    paddingVertical: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: ACCENT + "40",
+  },
+  btnSecondaryText: {
+    color: ACCENT,
+    fontSize: 15,
+    fontWeight: "600",
   },
   btnSignOut: {
     alignItems: "center",

@@ -9,24 +9,64 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { Link } from "expo-router";
+import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import { useAuth } from "../context/AuthContext";
+import ConsentCheckbox from "../components/ConsentCheckbox";
 
 export default function LoginScreen() {
-  const { signIn } = useAuth();
+  const { signIn, resendSignupCode, recordConsent } = useAuth();
+  const router = useRouter();
+  const { notice } = useLocalSearchParams<{ notice?: string }>();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [consent, setConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Message d'arrivée (ex. redirection depuis l'inscription d'un email déjà pris).
+  const [info, setInfo] = useState<string | null>(notice ?? null);
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
     setError(null);
+    setInfo(null);
+    if (!consent) {
+      setError("Tu dois accepter la politique de confidentialité pour continuer.");
+      return;
+    }
+    const trimmedEmail = email.trim();
     setLoading(true);
     try {
-      await signIn(email.trim(), password);
+      await signIn(trimmedEmail, password);
+      // Consentement explicite horodaté à chaque connexion.
+      try {
+        await recordConsent();
+      } catch {
+        // Non bloquant : la session est ouverte ; le gate _layout couvrira si besoin.
+      }
       // La redirection vers "/" est gérée automatiquement par _layout.tsx
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Erreur inconnue");
+      const code = (e as { code?: string }).code;
+      const msg = ((e as Error)?.message ?? "").toLowerCase();
+
+      // Compte existant mais email non confirmé → renvoie un code et bascule vers l'OTP.
+      if (code === "email_not_confirmed" || msg.includes("not confirmed")) {
+        try {
+          await resendSignupCode(trimmedEmail);
+        } catch {
+          // Ne bloque pas la navigation (ex. rate limit) : l'écran OTP gère le renvoi.
+        }
+        router.replace({
+          pathname: "/verify",
+          params: {
+            email: trimmedEmail,
+            notice:
+              "Ton compte n'est pas encore confirmé, on vient de t'envoyer un nouveau code.",
+          },
+        });
+        return;
+      }
+
+      // Message générique : ne révèle pas si l'email existe.
+      setError("Email ou mot de passe incorrect.");
     } finally {
       setLoading(false);
     }
@@ -60,7 +100,12 @@ export default function LoginScreen() {
         autoComplete="password"
       />
 
-      {/* Message d'erreur Supabase */}
+      <ConsentCheckbox checked={consent} onToggle={() => setConsent((v) => !v)} />
+
+      {/* Message d'information (redirection) */}
+      {info && <Text style={styles.info}>{info}</Text>}
+
+      {/* Message d'erreur */}
       {error && <Text style={styles.error}>{error}</Text>}
 
       <TouchableOpacity
@@ -118,6 +163,12 @@ const styles = StyleSheet.create({
     color: "#E8472A",
     fontSize: 13,
     textAlign: "center",
+  },
+  info: {
+    color: "#2a7a2a",
+    fontSize: 13,
+    textAlign: "center",
+    fontWeight: "600",
   },
   button: {
     backgroundColor: "#E8472A",

@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { Link, useRouter } from "expo-router";
 import { useAuth } from "../context/AuthContext";
+import ConsentCheckbox from "../components/ConsentCheckbox";
 
 export default function RegisterScreen() {
   const { signUp } = useAuth();
@@ -18,27 +19,59 @@ export default function RegisterScreen() {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [consent, setConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
+
+  // Validation côté client pour le confort ; l'enforcement réel reste serveur.
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
   const handleRegister = async () => {
     setError(null);
 
-    // Validation basique côté client
+    const trimmedEmail = email.trim();
     if (!username.trim()) {
       setError("Le nom d'utilisateur est requis.");
+      return;
+    }
+    if (!EMAIL_RE.test(trimmedEmail)) {
+      setError("Adresse email invalide.");
+      return;
+    }
+    if (password.length < 8) {
+      setError("Le mot de passe doit contenir au moins 8 caractères.");
+      return;
+    }
+    if (!consent) {
+      setError("Tu dois accepter la politique de confidentialité pour continuer.");
       return;
     }
 
     setLoading(true);
     try {
-      await signUp(email.trim(), password, username.trim());
-      // Compte créé : affiche le message de confirmation puis redirige
-      setSuccess(true);
-      setTimeout(() => router.replace("/login"), 3000);
+      await signUp(trimmedEmail, password, username.trim());
+      // Un code de confirmation a été envoyé par email → écran de saisie OTP.
+      // (Supabase gère la protection anti-énumération si l'email existe déjà.)
+      router.replace({ pathname: "/verify", params: { email: trimmedEmail } });
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Erreur inconnue");
+      const code = (e as { code?: string }).code;
+      const msg = ((e as Error)?.message ?? "").toLowerCase();
+
+      // Email déjà utilisé → invite à se connecter (login gère le cas non confirmé).
+      if (
+        code === "user_already_exists" ||
+        msg.includes("already registered") ||
+        msg.includes("already been registered")
+      ) {
+        router.replace({
+          pathname: "/login",
+          params: { notice: "Un compte existe déjà avec cet email. Connecte-toi." },
+        });
+        return;
+      }
+
+      // Message générique : ne révèle pas si un compte existe déjà.
+      setError("Inscription impossible pour le moment. Réessaie.");
     } finally {
       setLoading(false);
     }
@@ -81,12 +114,7 @@ export default function RegisterScreen() {
         autoComplete="new-password"
       />
 
-      {/* Message de succès après création du compte */}
-      {success && (
-        <Text style={styles.success}>
-          Compte créé ! Vérifie tes emails puis reviens te connecter.
-        </Text>
-      )}
+      <ConsentCheckbox checked={consent} onToggle={() => setConsent((v) => !v)} />
 
       {/* Message d'erreur Supabase ou validation locale */}
       {error && <Text style={styles.error}>{error}</Text>}
@@ -141,12 +169,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#1a1a1a",
     backgroundColor: "#fafafa",
-  },
-  success: {
-    color: "#2a7a2a",
-    fontSize: 14,
-    textAlign: "center",
-    fontWeight: "600",
   },
   error: {
     color: "#E8472A",

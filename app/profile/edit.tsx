@@ -20,12 +20,15 @@ import * as FileSystem from "expo-file-system/legacy";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { useUserProfile } from "../../hooks/useUserProfile";
+import { CATEGORY_CONFIG, type RestaurantCategory } from "../../constants/categories";
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
 const ACCENT   = "#E8472A";
 const MAX_BIO  = 200;
 const MAX_SIZE = 2 * 1024 * 1024; // 2 MB
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const FOOD_PREF_KEYS = Object.keys(CATEGORY_CONFIG) as RestaurantCategory[];
 
 // ── Helpers (pattern identique à usePublishReview) ────────────────────────────
 
@@ -61,15 +64,70 @@ export default function EditProfileScreen() {
 
   // ── State formulaire ─────────────────────────────────────────────────────
   const [bio, setBio]             = useState("");
+  const [username, setUsername]   = useState("");
+  const [foodPrefs, setFoodPrefs] = useState<string[]>([]);
+  const [newEmail, setNewEmail]   = useState("");
   const [newAvatarUri, setNewAvatarUri] = useState<string | null>(null);
   const [saving, setSaving]       = useState(false);
+  const [emailSaving, setEmailSaving] = useState(false);
 
   // Pré-remplit le formulaire une fois le profil chargé
   useEffect(() => {
     if (profile) {
       setBio(profile.bio ?? "");
+      setUsername(profile.username ?? "");
     }
   }, [profile?.id]); // déclenché une seule fois quand profile arrive
+
+  // food_preferences n'est pas exposé par useUserProfile → lecture dédiée.
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    supabase
+      .from("users")
+      .select("food_preferences")
+      .eq("id", userId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled && Array.isArray(data?.food_preferences)) {
+          setFoodPrefs(data!.food_preferences as string[]);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [userId]);
+
+  const toggleFoodPref = (key: string) => {
+    setFoodPrefs((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
+  };
+
+  // ── Changement d'email (déclenche une re-vérification OTP) ────────────────
+  const handleChangeEmail = async () => {
+    const trimmed = newEmail.trim();
+    if (!EMAIL_RE.test(trimmed)) {
+      Alert.alert("Email invalide", "Saisis une adresse email valide.");
+      return;
+    }
+    setEmailSaving(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ email: trimmed });
+      if (error) throw error;
+      // Un code est envoyé à la nouvelle adresse → écran OTP en mode email_change.
+      router.push({
+        pathname: "/verify",
+        params: {
+          email: trimmed,
+          type: "email_change",
+          notice: "Saisis le code envoyé à ta nouvelle adresse pour confirmer le changement.",
+        },
+      });
+    } catch {
+      Alert.alert("Erreur", "Impossible de modifier l'email pour le moment.");
+    } finally {
+      setEmailSaving(false);
+    }
+  };
 
   // ── Sélection image ──────────────────────────────────────────────────────
   const handlePickAvatar = () => {
@@ -123,6 +181,11 @@ export default function EditProfileScreen() {
   // ── Sauvegarde ───────────────────────────────────────────────────────────
   const handleSave = async () => {
     if (!userId) return;
+    const trimmedUsername = username.trim();
+    if (!trimmedUsername) {
+      Alert.alert("Nom requis", "Le nom d'utilisateur ne peut pas être vide.");
+      return;
+    }
     setSaving(true);
     try {
       let avatarUrl = profile?.avatar_url ?? null;
@@ -161,11 +224,21 @@ export default function EditProfileScreen() {
       const { error: updateError } = await supabase
         .from("users")
         .update({
-          bio:        bio.trim() || null,
-          avatar_url: avatarUrl,
+          username:         trimmedUsername,
+          bio:              bio.trim() || null,
+          avatar_url:       avatarUrl,
+          food_preferences: foodPrefs,
         })
         .eq("id", userId);
-      if (updateError) throw updateError;
+      if (updateError) {
+        // Violation de contrainte d'unicité sur username.
+        if ((updateError as { code?: string }).code === "23505") {
+          Alert.alert("Nom déjà pris", "Ce nom d'utilisateur est déjà utilisé.");
+          setSaving(false);
+          return;
+        }
+        throw updateError;
+      }
 
       Alert.alert("Profil mis à jour", "Vos modifications ont été enregistrées.");
       router.back();
@@ -189,8 +262,8 @@ export default function EditProfileScreen() {
   }
 
   const displayUri   = newAvatarUri ?? profile?.avatar_url ?? null;
-  const username     = profile?.username ?? "";
   const bioRemaining = MAX_BIO - bio.length;
+  const currentEmail = authUser?.email ?? "";
 
   // ── Rendu ─────────────────────────────────────────────────────────────────
   return (
@@ -267,14 +340,67 @@ export default function EditProfileScreen() {
           </Text>
         </View>
 
-        {/* ── Section username (lecture seule) ─────────────────────────── */}
+        {/* ── Section username ──────────────────────────────────────────── */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Nom d'utilisateur</Text>
-          <View style={styles.usernameRow}>
-            <Text style={styles.usernameValue}>{username}</Text>
-            <Ionicons name="lock-closed-outline" size={14} color="#9CA3AF" />
+          <TextInput
+            style={styles.input}
+            value={username}
+            onChangeText={setUsername}
+            placeholder="Nom d'utilisateur"
+            placeholderTextColor="#9CA3AF"
+            autoCapitalize="none"
+            maxLength={30}
+          />
+        </View>
+
+        {/* ── Section préférences alimentaires ──────────────────────────── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Préférences alimentaires</Text>
+          <View style={styles.chipsWrap}>
+            {FOOD_PREF_KEYS.map((key) => {
+              const selected = foodPrefs.includes(key);
+              const cfg = CATEGORY_CONFIG[key];
+              return (
+                <Pressable
+                  key={key}
+                  style={[styles.chip, selected && styles.chipSelected]}
+                  onPress={() => toggleFoodPref(key)}
+                >
+                  <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                    {cfg.emoji} {cfg.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
-          <Text style={styles.usernameHint}>Ne peut pas être modifié pour le moment</Text>
+        </View>
+
+        {/* ── Section email ─────────────────────────────────────────────── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Email</Text>
+          <Text style={styles.currentEmail}>Actuel : {currentEmail}</Text>
+          <TextInput
+            style={styles.input}
+            value={newEmail}
+            onChangeText={setNewEmail}
+            placeholder="Nouvelle adresse email"
+            placeholderTextColor="#9CA3AF"
+            autoCapitalize="none"
+            keyboardType="email-address"
+            autoComplete="email"
+          />
+          <Pressable
+            style={[styles.emailBtn, (emailSaving || !newEmail.trim()) && styles.emailBtnDisabled]}
+            onPress={handleChangeEmail}
+            disabled={emailSaving || !newEmail.trim()}
+          >
+            {emailSaving ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.emailBtnText}>Modifier l'email (re-vérification)</Text>
+            )}
+          </Pressable>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -402,6 +528,67 @@ const styles = StyleSheet.create({
   },
   bioCounterMax: {
     color: ACCENT,
+  },
+
+  // ── Champs texte génériques ──────────────────────────────────────────────
+  input: {
+    backgroundColor: "#F9FAFB",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: "#1a1a1a",
+  },
+
+  // ── Préférences (chips) ───────────────────────────────────────────────────
+  chipsWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  chip: {
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: "#F9FAFB",
+  },
+  chipSelected: {
+    borderColor: ACCENT,
+    backgroundColor: ACCENT + "14",
+  },
+  chipText: {
+    fontSize: 13,
+    color: "#555",
+  },
+  chipTextSelected: {
+    color: ACCENT,
+    fontWeight: "600",
+  },
+
+  // ── Email ─────────────────────────────────────────────────────────────────
+  currentEmail: {
+    fontSize: 12,
+    color: "#9CA3AF",
+    marginBottom: 2,
+  },
+  emailBtn: {
+    marginTop: 8,
+    backgroundColor: ACCENT,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  emailBtnDisabled: {
+    opacity: 0.5,
+  },
+  emailBtnText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "700",
   },
 
   // ── Username ───────────────────────────────────────────────────────────────

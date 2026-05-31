@@ -38,6 +38,8 @@ const config = {
     },
     plugins: [
       "expo-router",
+      "expo-secure-store",
+      "expo-sharing",
       "@maplibre/maplibre-react-native",
       [
         "expo-splash-screen",
