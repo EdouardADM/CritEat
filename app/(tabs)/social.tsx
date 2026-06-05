@@ -6,38 +6,8 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
-import { useUserList, type UserListItem } from "../../hooks/useUserList";
-import { getKarma } from "../../constants/karma";
-
-// ── Composant ligne utilisateur ───────────────────────────────────────────────
-
-function UserRow({ item }: { item: UserListItem }) {
-  const karma = getKarma(item.karma_tier);
-  const initials = item.username.slice(0, 2).toUpperCase();
-
-  return (
-    <View style={styles.row}>
-      {/* Avatar */}
-      <View style={styles.avatar}>
-        <Text style={styles.avatarText}>{initials}</Text>
-      </View>
-
-      {/* Infos */}
-      <View style={styles.info}>
-        <Text style={styles.username}>{item.username}</Text>
-        <View style={styles.metaRow}>
-          <Ionicons name={karma.icon as any} size={12} color={karma.color} />
-          <Text style={[styles.tier, { color: karma.color }]}>{karma.label}</Text>
-          <Text style={styles.dot}>·</Text>
-          <Text style={styles.reviewCount}>
-            {item.review_count} avis
-          </Text>
-        </View>
-      </View>
-    </View>
-  );
-}
+import { useUserList } from "../../hooks/useUserList";
+import UserRow from "../../components/UserRow";
 
 // ── Écran ─────────────────────────────────────────────────────────────────────
 
@@ -70,7 +40,7 @@ export default function SocialTab() {
         <FlatList
           data={users}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <UserRow item={item} />}
+          renderItem={({ item }) => <UserRow item={item} showFollow />}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           contentContainerStyle={{ paddingBottom: insets.bottom + 16 }}
           ListEmptyComponent={

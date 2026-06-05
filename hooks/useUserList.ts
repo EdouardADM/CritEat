@@ -7,6 +7,7 @@ export type UserListItem = {
   avatar_url: string | null;
   karma_tier: string;
   review_count: number;
+  is_followed_by_me: boolean;
 };
 
 export function useUserList(): {
@@ -40,7 +41,24 @@ export function useUserList(): {
         const { data, error: fetchError } = await query;
         if (fetchError) throw fetchError;
 
-        if (!cancelled) setUsers((data ?? []) as UserListItem[]);
+        const rows = (data ?? []) as Omit<UserListItem, "is_followed_by_me">[];
+
+        // Détermine en une requête quels utilisateurs listés sont déjà suivis.
+        const followedIds = new Set<string>();
+        if (me && rows.length > 0) {
+          const { data: followsData } = await supabase
+            .from("follows")
+            .select("following_id")
+            .eq("follower_id", me.id)
+            .in("following_id", rows.map((u) => u.id));
+          for (const f of followsData ?? []) followedIds.add(f.following_id);
+        }
+
+        if (!cancelled) {
+          setUsers(
+            rows.map((u) => ({ ...u, is_followed_by_me: followedIds.has(u.id) })),
+          );
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Erreur");
       } finally {

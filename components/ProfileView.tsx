@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -13,8 +13,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../context/AuthContext";
 import { useUserProfile } from "../hooks/useUserProfile";
+import { useFollow } from "../hooks/useFollow";
 import KarmaBadge from "./KarmaBadge";
 import KarmaInfoModal from "./KarmaInfoModal";
+import ProfileMiniMap from "./ProfileMiniMap";
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -71,10 +73,28 @@ export default function ProfileView({ userId }: { userId: string }) {
   const { user: authUser, signOut } = useAuth();
 
   const { profile, loading, error, refetch } = useUserProfile(userId);
+  const { toggleFollow, submitting } = useFollow();
 
   const [infoVisible, setInfoVisible] = useState(false);
+  const [following, setFollowing] = useState(false);
+
+  // Synchronise l'état de suivi optimiste avec la donnée serveur.
+  useEffect(() => {
+    if (profile) setFollowing(profile.is_followed_by_me);
+  }, [profile?.is_followed_by_me]);
 
   const isSelf = authUser?.id === userId;
+
+  const handleToggleFollow = async () => {
+    const previous = following;
+    setFollowing(!previous); // optimiste
+    try {
+      await toggleFollow(userId, previous);
+      refetch(); // met à jour follower_count côté serveur
+    } catch {
+      setFollowing(previous); // revert
+    }
+  };
 
   // ── Loading ───────────────────────────────────────────────────────────────
   if (loading) {
@@ -167,17 +187,31 @@ export default function ProfileView({ userId }: { userId: string }) {
         ))}
       </View>
 
-      {/* ── Followers / Following ─────────────────────────────────────────── */}
+      {/* ── Followers / Following (cliquables) ────────────────────────────── */}
       <View style={styles.followRow}>
-        <Text style={styles.followText}>
-          <Text style={styles.followCount}>{profile.follower_count}</Text>
-          {" abonnés"}
-        </Text>
+        <Pressable
+          onPress={() =>
+            router.push({ pathname: "/follows", params: { userId, mode: "followers" } })
+          }
+          hitSlop={8}
+        >
+          <Text style={styles.followText}>
+            <Text style={styles.followCount}>{profile.follower_count}</Text>
+            {" abonnés"}
+          </Text>
+        </Pressable>
         <View style={styles.followDot} />
-        <Text style={styles.followText}>
-          <Text style={styles.followCount}>{profile.following_count}</Text>
-          {" abonnements"}
-        </Text>
+        <Pressable
+          onPress={() =>
+            router.push({ pathname: "/follows", params: { userId, mode: "following" } })
+          }
+          hitSlop={8}
+        >
+          <Text style={styles.followText}>
+            <Text style={styles.followCount}>{profile.following_count}</Text>
+            {" abonnements"}
+          </Text>
+        </Pressable>
       </View>
 
       {/* ── Catégorie préférée ────────────────────────────────────────────── */}
@@ -188,12 +222,8 @@ export default function ProfileView({ userId }: { userId: string }) {
         </View>
       )}
 
-      {/* ── Mini-map (placeholder Phase D) ───────────────────────────────── */}
-      {/* TODO Phase D — mini-map des restos visités */}
-      <View style={styles.placeholder}>
-        <Ionicons name="map-outline" size={28} color="#D1D5DB" />
-        <Text style={styles.placeholderText}>Carte des restos visités</Text>
-      </View>
+      {/* ── Carte des restos notés ────────────────────────────────────────── */}
+      <ProfileMiniMap userId={userId} />
 
       {/* ── Activité récente (placeholder Phase D) ───────────────────────── */}
       {/* TODO Phase D — liste des avis récents */}
@@ -227,23 +257,21 @@ export default function ProfileView({ userId }: { userId: string }) {
           </>
         ) : (
           <Pressable
-            style={[
-              styles.btnFollow,
-              profile.is_followed_by_me && styles.btnFollowActive,
-            ]}
-            onPress={() => {}}
+            style={[styles.btnFollow, following && styles.btnFollowActive]}
+            onPress={handleToggleFollow}
+            disabled={submitting}
           >
             <Ionicons
-              name={profile.is_followed_by_me ? "checkmark" : "person-add-outline"}
+              name={following ? "checkmark" : "person-add-outline"}
               size={16}
-              color={profile.is_followed_by_me ? ACCENT : "#fff"}
+              color={following ? ACCENT : "#fff"}
               style={{ marginRight: 6 }}
             />
             <Text style={[
               styles.btnFollowText,
-              profile.is_followed_by_me && styles.btnFollowTextActive,
+              following && styles.btnFollowTextActive,
             ]}>
-              {profile.is_followed_by_me ? "Suivi" : "Suivre"}
+              {following ? "Suivi" : "Suivre"}
             </Text>
           </Pressable>
         )}
