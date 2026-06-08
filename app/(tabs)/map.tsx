@@ -107,6 +107,9 @@ export default function MapScreen() {
   const selectedRestaurantRef = useRef<Restaurant | null>(null);
   const showResultsRef = useRef(false);
   const ignoreNextQueryChangeRef = useRef(false);
+  // Horodatage de la dernière ouverture d'aperçu : neutralise la fermeture
+  // parasite due au double `onPress` de MapLibre juste après l'ouverture.
+  const lastOpenAtRef = useRef(0);
 
   // ── GPS ─────────────────────────────────────────────────────────────────────
   const [userCoords, setUserCoords] = useState<Coords | null>(null);
@@ -315,19 +318,15 @@ export default function MapScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Tap sur un restaurant dans le GeoJSONSource ──────────────────────────────
-  // Si une preview est déjà ouverte → ferme d'abord (l'utilisateur tape à nouveau
-  // pour ouvrir la nouvelle). Évite le remplacement direct, plus prévisible.
+  // ── Tap sur un restaurant ────────────────────────────────────────────────────
+  // Ouvre TOUJOURS l'aperçu du resto tapé (ou bascule vers un autre). On ne ferme
+  // jamais ici → évite la bascule open/close qui rendait le tap peu fiable.
   const handleRestaurantPress = useCallback((feature: any) => {
     if (!feature) return;
-    if (selectedRestaurantRef.current) {
-      isRestaurantSelectedRef.current = false;
-      setSelectedRestaurant(null);
-      return;
-    }
     const props = feature.properties;
     const [lng, lat] = feature.geometry.coordinates as [number, number];
     isRestaurantSelectedRef.current = true;
+    lastOpenAtRef.current = Date.now();
     setSelectedRestaurant({
       id: props.id, place_id: props.place_id, name: props.name,
       category: props.category, address: props.address, city: props.city,
@@ -339,8 +338,9 @@ export default function MapScreen() {
     moveCameraTo([lng, lat], 16, "flyTo", 350);
   }, [moveCameraTo]);
 
-  // ── Tap sur le fond de carte → ferme la fiche ────────────────────────────────
-  // v11 : onPress fournit NativeSyntheticEvent<PressEvent> avec event.nativeEvent.point = [x, y]
+  // ── Tap sur la carte ─────────────────────────────────────────────────────────
+  // v11 : onPress fournit event.nativeEvent.point = [x, y]. On interroge une BOÎTE
+  // de pixels autour du doigt (tolérance) pour viser un marqueur plus facilement.
   const handleMapPress = useCallback(async (event: any) => {
     if (showResultsRef.current) {
       Keyboard.dismiss();
@@ -349,11 +349,16 @@ export default function MapScreen() {
       return;
     }
 
-    const [screenPointX, screenPointY] = event.nativeEvent.point as [number, number];
+    const [x, y] = event.nativeEvent.point as [number, number];
+    const HIT = 14; // px de tolérance autour du tap
+    const box: [[number, number], [number, number]] = [
+      [x - HIT, y - HIT],
+      [x + HIT, y + HIT],
+    ];
 
     try {
       const features = await mapRef.current?.queryRenderedFeatures(
-        [screenPointX, screenPointY],
+        box,
         { layers: ["restaurant-points"] }
       );
 
@@ -365,8 +370,8 @@ export default function MapScreen() {
       console.warn("Erreur de détection du clic:", e);
     }
 
-    // Tap sur fond de carte → ferme la fiche si ouverte
-    if (selectedRestaurantRef.current) {
+    // Tap sur le fond → ferme la fiche, SAUF juste après une ouverture (2ᵉ event parasite).
+    if (selectedRestaurantRef.current && Date.now() - lastOpenAtRef.current > 400) {
       isRestaurantSelectedRef.current = false;
       setSelectedRestaurant(null);
     }
@@ -387,9 +392,6 @@ export default function MapScreen() {
 
   // ── Sélection résultat local ─────────────────────────────────────────────────
   const handleSelectLocal = useCallback((result: SearchResult) => {
-    console.log("=== handleSelectLocal appelé ===");
-    console.log("result:", result.name, result.lat, result.lng);
-
     // 1. Ferme tout d'abord — laisse React re-render sans backdrop
     setShowResults(false);
     setSearchQuery("");
@@ -398,14 +400,10 @@ export default function MapScreen() {
     setTimeout(() => { ignoreNextQueryChangeRef.current = false; }, 1000);
     searchBarRef.current?.blur();
 
-    console.log("showResults mis à false");
-
     // 2. Monte la preview card après que le backdrop est démonté
     setTimeout(() => {
-      console.log("setTimeout(0) — avant setSelectedRestaurant");
-      console.log("isRestaurantSelectedRef avant:", isRestaurantSelectedRef.current);
-
       isRestaurantSelectedRef.current = true;
+      lastOpenAtRef.current = Date.now();
       setSelectedRestaurant({
         id: result.id,
         place_id: result.place_id,
@@ -421,15 +419,10 @@ export default function MapScreen() {
         review_count: result.review_count,
       });
       moveCameraTo([result.lng, result.lat], 16, "flyTo", 400);
-
-      console.log("setSelectedRestaurant appelé");
-      console.log("isRestaurantSelectedRef après:", isRestaurantSelectedRef.current);
     }, 0);
 
     // 3. Force le fetch des restaurants autour de la nouvelle position
     setTimeout(() => {
-      console.log("setTimeout(500) — force mapBounds");
-      console.log("isRestaurantSelectedRef avant reset:", isRestaurantSelectedRef.current);
       isRestaurantSelectedRef.current = false;
       setMapBounds({
         minLat: result.lat - 0.005,
@@ -439,7 +432,6 @@ export default function MapScreen() {
         zoom: 16,
       });
       isRestaurantSelectedRef.current = true;
-      console.log("mapBounds mis à jour");
     }, 500);
   }, [moveCameraTo]);
 
@@ -522,10 +514,10 @@ export default function MapScreen() {
                 "interpolate",
                 ["linear"],
                 ["coalesce", ["get", "popularity_score"], 0],
-                0, 5, 50, 7, 100, 9,
+                0, 7, 50, 9, 100, 12,
               ] as any,
               "circle-stroke-color": "#FFFFFF",
-              "circle-stroke-width": 1.5,
+              "circle-stroke-width": 2,
               "circle-opacity": selectedRestaurant ? 0.3 : 0.9,
             }}
           />
