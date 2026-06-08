@@ -20,6 +20,7 @@ import StepConfirm from "../../components/review/StepConfirm";
 import { useReviewDraft } from "../../hooks/useReviewDraft";
 import { usePublishReview } from "../../hooks/usePublishReview";
 import { useMyReviewForRestaurant } from "../../hooks/useMyReviewForRestaurant";
+import { countChars } from "../../utils/text";
 import type { ScoreKey } from "../../components/review/StepScores";
 
 // ── Constantes ────────────────────────────────────────────────────────────────
@@ -153,7 +154,7 @@ export default function ReviewScreen() {
         draft.scoreService  != null &&
         draft.scoreFood     != null
       );
-      case 3: return draft.comment.length >= MIN_COMMENT;
+      case 3: return countChars(draft.comment) >= MIN_COMMENT;
       case 4: return true;
     }
   })();

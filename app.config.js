@@ -75,7 +75,9 @@ const config = {
     ],
     experiments: {
       typedRoutes: true,
-      reactCompiler: true,
+      // Désactivé : React Compiler (expérimental) modifie le timing de rendu des
+      // TextInput contrôlés et fait perdre les emoji à la saisie sur iOS.
+      reactCompiler: false,
     },
     extra: {
       eas: {

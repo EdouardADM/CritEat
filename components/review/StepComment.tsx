@@ -1,4 +1,5 @@
 import { StyleSheet, Text, TextInput, View } from "react-native";
+import { countChars } from "../../utils/text";
 
 const MIN_CHARS = 50;
 
@@ -8,7 +9,8 @@ type Props = {
 };
 
 export default function StepComment({ comment, onChange }: Props) {
-  const count = comment.length;
+  // Décompte aligné sur Postgres (points de code) : un emoji = 1 caractère.
+  const count = countChars(comment);
   const isValid = count >= MIN_CHARS;
 
   return (
