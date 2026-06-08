@@ -1,13 +1,17 @@
+import { useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  Keyboard,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useUserList } from "../../hooks/useUserList";
+import { useUserSearch } from "../../hooks/useUserSearch";
 import UserRow from "../../components/UserRow";
+import SearchBar from "../../components/SearchBar";
 
 // ── Écran ─────────────────────────────────────────────────────────────────────
 
@@ -15,37 +19,63 @@ export default function SocialTab() {
   const insets = useSafeAreaInsets();
   const { users, loading, error } = useUserList();
 
+  const [query, setQuery] = useState("");
+  const { results, loading: searching } = useUserSearch(query);
+
+  // Mode recherche actif dès 2 caractères ; sinon liste « Critiqueurs actifs ».
+  const searchActive = query.trim().length >= 2;
+  const data = searchActive ? results : users;
+  const isLoading = searchActive ? searching : loading;
+
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>Communauté</Text>
-        <Text style={styles.subtitle}>Critiqueurs actifs</Text>
+        <Text style={styles.subtitle}>
+          {searchActive ? "Résultats de recherche" : "Critiqueurs actifs"}
+        </Text>
+        <View style={styles.searchWrapper}>
+          <SearchBar
+            value={query}
+            onChangeText={setQuery}
+            onClear={() => {
+              setQuery("");
+              Keyboard.dismiss();
+            }}
+            isLoading={searching}
+          />
+        </View>
       </View>
 
       {/* Contenu */}
-      {loading && (
+      {isLoading && (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color="#E8472A" />
         </View>
       )}
 
-      {error && (
+      {!searchActive && error && !isLoading && (
         <View style={styles.centered}>
           <Text style={styles.errorText}>{error}</Text>
         </View>
       )}
 
-      {!loading && !error && (
+      {!isLoading && !(!searchActive && error) && (
         <FlatList
-          data={users}
+          data={data}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => <UserRow item={item} showFollow />}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           contentContainerStyle={{ paddingBottom: insets.bottom + 16 }}
+          keyboardShouldPersistTaps="handled"
           ListEmptyComponent={
             <View style={styles.centered}>
-              <Text style={styles.emptyText}>Aucun utilisateur pour l'instant</Text>
+              <Text style={styles.emptyText}>
+                {searchActive
+                  ? "Aucun utilisateur trouvé"
+                  : "Aucun utilisateur pour l'instant"}
+              </Text>
             </View>
           }
         />
@@ -78,6 +108,9 @@ const styles = StyleSheet.create({
     color: "#999",
     marginTop: 2,
   },
+  searchWrapper: {
+    marginTop: 14,
+  },
   centered: {
     flex: 1,
     alignItems: "center",
@@ -91,54 +124,6 @@ const styles = StyleSheet.create({
   emptyText: {
     color: "#aaa",
     fontSize: 14,
-  },
-
-  // ── Ligne ─────────────────────────────────────────────────────────────────
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    gap: 14,
-  },
-  avatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: "#F0F0F0",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  avatarText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#555",
-  },
-  info: {
-    flex: 1,
-    gap: 4,
-  },
-  username: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#1a1a1a",
-  },
-  metaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  tier: {
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  dot: {
-    fontSize: 12,
-    color: "#ccc",
-  },
-  reviewCount: {
-    fontSize: 12,
-    color: "#999",
   },
   separator: {
     height: StyleSheet.hairlineWidth,
