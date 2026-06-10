@@ -200,6 +200,15 @@ export default function RestaurantPreviewCard({
         {...swipePanResponder.panHandlers}
         style={[styles.card, { paddingBottom: bottomInset }]}
       >
+        {/* Bouton de fermeture explicite */}
+        <Pressable
+          style={styles.closeBtn}
+          onPress={() => onCloseRef.current()}
+          hitSlop={8}
+        >
+          <Ionicons name="close" size={18} color="#888" />
+        </Pressable>
+
         {/* ── Zone draggable ────────────────────────────────────────────── */}
         <View {...panResponder.panHandlers} style={styles.dragArea}>
           <View style={styles.dragHandle}>
@@ -274,6 +283,18 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 16,
     zIndex: 30,
+  },
+  closeBtn: {
+    position: "absolute",
+    top: 8,
+    right: 12,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 40,
   },
 
   // ── Zone draggable ─────────────────────────────────────────────────────────

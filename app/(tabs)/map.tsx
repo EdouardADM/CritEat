@@ -17,7 +17,6 @@ import {
   GeoJSONSource,
   Layer,
   UserLocation,
-  ViewAnnotation,
   type MapRef,
   type CameraRef,
   type ViewStateChangeEvent,
@@ -34,7 +33,7 @@ import {
   useRestaurantSearch,
   type SearchResult,
 } from "../../hooks/useRestaurantSearch";
-import { type RestaurantCategory, getCategoryConfig } from "../../constants/categories";
+import { type RestaurantCategory } from "../../constants/categories";
 import { restaurantsToGeoJSON } from "../../utils/geo";
 import { useFollowingRestaurants } from "../../hooks/useFollowingRestaurants";
 import { boundsOf } from "../../hooks/useUserReviewedRestaurants";
@@ -109,9 +108,6 @@ export default function MapScreen() {
   const selectedRestaurantRef = useRef<Restaurant | null>(null);
   const showResultsRef = useRef(false);
   const ignoreNextQueryChangeRef = useRef(false);
-  // Horodatage de la dernière ouverture d'aperçu : neutralise la fermeture
-  // parasite due au double `onPress` de MapLibre juste après l'ouverture.
-  const lastOpenAtRef = useRef(0);
 
   // ── GPS ─────────────────────────────────────────────────────────────────────
   const [userCoords, setUserCoords] = useState<Coords | null>(null);
@@ -179,17 +175,10 @@ export default function MapScreen() {
     [visibleRestaurants]
   );
 
-  // GeoJSON affiché dans le GeoJSONSource : exclut le restaurant sélectionné
-  // (il est rendu en surbrillance via ViewAnnotation)
-  const displayGeoJSON = useMemo(() => {
-    if (!selectedRestaurant) return restaurantsGeoJSON;
-    return {
-      ...restaurantsGeoJSON,
-      features: restaurantsGeoJSON.features.filter(
-        (f) => f.properties.place_id !== selectedRestaurant.place_id
-      ),
-    };
-  }, [restaurantsGeoJSON, selectedRestaurant]);
+  // Id du resto sélectionné — alimente la couche de surbrillance (pas de
+  // ViewAnnotation : on garde le marqueur dans la source pour qu'il reste tapable
+  // et qu'aucun overlay natif ne « fantôme »). "" = aucune sélection.
+  const selectedId = selectedRestaurant?.id ?? "";
 
   // ── Toggle filtre catégorie ──────────────────────────────────────────────────
   const handleToggleCategory = useCallback((category: RestaurantCategory) => {
@@ -350,7 +339,6 @@ export default function MapScreen() {
     const props = feature.properties;
     const [lng, lat] = feature.geometry.coordinates as [number, number];
     isRestaurantSelectedRef.current = true;
-    lastOpenAtRef.current = Date.now();
     setSelectedRestaurant({
       id: props.id, place_id: props.place_id, name: props.name,
       category: props.category, address: props.address, city: props.city,
@@ -394,11 +382,9 @@ export default function MapScreen() {
       console.warn("Erreur de détection du clic:", e);
     }
 
-    // Tap sur le fond → ferme la fiche, SAUF juste après une ouverture (2ᵉ event parasite).
-    if (selectedRestaurantRef.current && Date.now() - lastOpenAtRef.current > 400) {
-      isRestaurantSelectedRef.current = false;
-      setSelectedRestaurant(null);
-    }
+    // Un tap sur le fond de carte ne ferme PAS l'aperçu : on évite ainsi qu'un
+    // onPress parasite de MapLibre le referme juste après l'ouverture. La fermeture
+    // se fait par le bouton ✕ ou un swipe sur la carte d'aperçu.
   }, [handleRestaurantPress]);
 
   // ── Recentrer sur l'utilisateur ──────────────────────────────────────────────
@@ -427,7 +413,6 @@ export default function MapScreen() {
     // 2. Monte la preview card après que le backdrop est démonté
     setTimeout(() => {
       isRestaurantSelectedRef.current = true;
-      lastOpenAtRef.current = Date.now();
       setSelectedRestaurant({
         id: result.id,
         place_id: result.place_id,
@@ -531,17 +516,18 @@ export default function MapScreen() {
         <GeoJSONSource
           id="restaurants"
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          data={displayGeoJSON as any}
+          data={restaurantsGeoJSON as any}
         >
           {/*
             Affichage progressif style Google Maps :
             - Les restaurants sont triés par score dans le GeoJSON (rank 1 = meilleur)
             - Le filtre MapLibre n'affiche que les rank ≤ seuil selon le zoom
             - ["step", ["zoom"], défaut, z1, val1, z2, val2, ...]
-              zoom < 11  → top 5   (vue ville)
-              zoom 11-12 → top 15  (vue quartier)
-              zoom 12-13 → top 40
-              zoom 13-14 → top 80
+            - Seuils réduits ~1,5× pour désencombrer la carte :
+              zoom < 11  → top 3   (vue ville)
+              zoom 11-12 → top 10  (vue quartier)
+              zoom 12-13 → top 27
+              zoom 13-14 → top 53
               zoom ≥ 14  → tout
           */}
           <Layer
@@ -551,7 +537,7 @@ export default function MapScreen() {
             filter={[
               "<=",
               ["get", "rank"],
-              ["step", ["zoom"], 5, 11, 15, 12, 40, 13, 80, 14, 10000],
+              ["step", ["zoom"], 3, 11, 10, 12, 27, 13, 53, 14, 10000],
             ] as any}
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             paint={{
@@ -564,28 +550,25 @@ export default function MapScreen() {
               ] as any,
               "circle-stroke-color": "#FFFFFF",
               "circle-stroke-width": 2,
-              "circle-opacity": selectedRestaurant ? 0.3 : 0.9,
+              "circle-opacity": selectedRestaurant ? 0.45 : 0.9,
+            }}
+          />
+
+          {/* Surbrillance du resto sélectionné — dans la couche (pas d'overlay natif) */}
+          <Layer
+            type="circle"
+            id="restaurant-selected"
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            filter={["==", ["get", "id"], selectedId] as any}
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            paint={{
+              "circle-color": CATEGORY_COLOR_EXPRESSION as any,
+              "circle-radius": 15,
+              "circle-stroke-color": "#FFFFFF",
+              "circle-stroke-width": 3,
             }}
           />
         </GeoJSONSource>
-
-        {/* Marqueur sélectionné — rendu natif via ViewAnnotation */}
-        {selectedRestaurant && (() => {
-          const cfg = getCategoryConfig(selectedRestaurant.category);
-          return (
-            <ViewAnnotation
-              lngLat={[selectedRestaurant.longitude, selectedRestaurant.latitude]}
-              anchor="bottom"
-            >
-              <View style={styles.markerContainer}>
-                <View style={[styles.markerCircle, { backgroundColor: cfg.color }]}>
-                  <Text style={styles.markerEmoji}>{cfg.emoji}</Text>
-                </View>
-                <View style={[styles.markerTail, { borderTopColor: cfg.color }]} />
-              </View>
-            </ViewAnnotation>
-          );
-        })()}
       </Map>
 
 
