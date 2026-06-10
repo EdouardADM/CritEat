@@ -54,7 +54,6 @@ async function uploadPhoto(
     encoding: "base64",
   });
   const bytes = decodeBase64(base64);
-  console.log(`[uploadPhoto] photo ${index}: ${bytes.byteLength} bytes`);
 
   const ext = photoUri.split(".").pop()?.toLowerCase().split("?")[0] ?? "jpg";
   const storagePath = `${userId}/${restaurantId}/${Date.now()}_${index}.${ext}`;

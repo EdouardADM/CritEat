@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Animated,
   Keyboard,
   type NativeSyntheticEvent,
   Pressable,
@@ -40,10 +39,7 @@ import { boundsOf } from "../../hooks/useUserReviewedRestaurants";
 
 type Coords = { latitude: number; longitude: number };
 
-// Style OpenFreeMap (gratuit, pas de clé API)
-const OPENFREEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
-
-// Fallback raster OSM si OpenFreeMap n'est pas disponible
+// Fond raster OSM (gratuit, pas de clé API)
 const FALLBACK_STYLE = {
   version: 8 as const,
   sources: {
@@ -140,11 +136,6 @@ export default function MapScreen() {
   // ── Échelle de carte ────────────────────────────────────────────────────────
   const [scaleBar, setScaleBar] = useState(() => computeScaleBar(12, 50.8503));
 
-  // ── Toast ───────────────────────────────────────────────────────────────────
-  const [toastMessage, setToastMessage] = useState("");
-  const toastOpacity = useRef(new Animated.Value(0)).current;
-
-
   // ── Restaurants (fetch + cache) ──────────────────────────────────────────────
   const { restaurants, loading: restaurantsLoading } = useRestaurants(mapBounds);
 
@@ -200,19 +191,6 @@ export default function MapScreen() {
     }, 200);
     return () => clearTimeout(t);
   }, [friendsActive, followingRestaurants]);
-
-  // ── Toast helper ─────────────────────────────────────────────────────────────
-  const showToast = useCallback(
-    (message: string) => {
-      setToastMessage(message);
-      Animated.sequence([
-        Animated.timing(toastOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
-        Animated.delay(2200),
-        Animated.timing(toastOpacity, { toValue: 0, duration: 350, useNativeDriver: true }),
-      ]).start();
-    },
-    [toastOpacity]
-  );
 
   // ── Mise à jour de l'échelle en temps réel (pendant le geste) ───────────────
   // v11 : l'event est NativeSyntheticEvent<ViewStateChangeEvent>
@@ -393,12 +371,6 @@ export default function MapScreen() {
     moveCameraTo([userCoords.longitude, userCoords.latitude], 14, "flyTo", 500);
   }, [userCoords, moveCameraTo]);
 
-  // ── Fermer la recherche ──────────────────────────────────────────────────────
-  const dismissSearch = useCallback(() => {
-    Keyboard.dismiss();
-    searchBarRef.current?.blur();
-    setShowResults(false);
-  }, []);
 
   // ── Sélection résultat local ─────────────────────────────────────────────────
   const handleSelectLocal = useCallback((result: SearchResult) => {
@@ -417,7 +389,6 @@ export default function MapScreen() {
         id: result.id,
         place_id: result.place_id,
         name: result.name,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         category: result.category as any,
         address: result.address,
         city: result.city,
@@ -515,7 +486,6 @@ export default function MapScreen() {
 
         <GeoJSONSource
           id="restaurants"
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           data={restaurantsGeoJSON as any}
         >
           {/*
@@ -533,13 +503,11 @@ export default function MapScreen() {
           <Layer
             type="circle"
             id="restaurant-points"
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             filter={[
               "<=",
               ["get", "rank"],
               ["step", ["zoom"], 3, 11, 10, 12, 27, 13, 53, 14, 10000],
             ] as any}
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             paint={{
               "circle-color": CATEGORY_COLOR_EXPRESSION as any,
               "circle-radius": [
@@ -558,9 +526,7 @@ export default function MapScreen() {
           <Layer
             type="circle"
             id="restaurant-selected"
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             filter={["==", ["get", "id"], selectedId] as any}
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             paint={{
               "circle-color": CATEGORY_COLOR_EXPRESSION as any,
               "circle-radius": 15,
@@ -676,15 +642,6 @@ export default function MapScreen() {
         </View>
       )}
 
-      {/* Toast */}
-      <Animated.View
-        style={[
-          styles.toast,
-          { opacity: toastOpacity, bottom: insets.bottom + 32, pointerEvents: "none" },
-        ]}
-      >
-        <Text style={styles.toastText}>{toastMessage}</Text>
-      </Animated.View>
     </View>
   );
 }
@@ -803,48 +760,4 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginTop: 2,
   },
-
-  // ── Marqueur sélectionné ──────────────────────────────────────────────────
-  markerContainer: {
-    alignItems: "center",
-  },
-  markerCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 3,
-    borderColor: "#FFFFFF",
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 6,
-  },
-  markerEmoji: {
-    fontSize: 20,
-  },
-  markerTail: {
-    width: 0,
-    height: 0,
-    borderLeftWidth: 8,
-    borderRightWidth: 8,
-    borderTopWidth: 10,
-    borderLeftColor: "transparent",
-    borderRightColor: "transparent",
-    marginTop: -1,
-  },
-
-  // ── Toast ──────────────────────────────────────────────────────────────────
-  toast: {
-    position: "absolute",
-    alignSelf: "center",
-    backgroundColor: "#1a1a1a",
-    borderRadius: 20,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    zIndex: 100,
-  },
-  toastText: { color: "#fff", fontSize: 14, fontWeight: "600" },
 });
