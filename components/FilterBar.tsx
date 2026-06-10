@@ -1,12 +1,22 @@
 import { ScrollView, Pressable, Text, StyleSheet } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { CATEGORY_CONFIG, RestaurantCategory } from "../constants/categories";
+
+const ACCENT = "#E8472A";
 
 type Props = {
   activeCategories: RestaurantCategory[];
   onToggle: (category: RestaurantCategory) => void;
+  friendsActive: boolean;
+  onToggleFriends: () => void;
 };
 
-export default function FilterBar({ activeCategories, onToggle }: Props) {
+export default function FilterBar({
+  activeCategories,
+  onToggle,
+  friendsActive,
+  onToggleFriends,
+}: Props) {
   return (
     <ScrollView
       horizontal
@@ -14,6 +24,24 @@ export default function FilterBar({ activeCategories, onToggle }: Props) {
       contentContainerStyle={styles.content}
       style={styles.scroll}
     >
+      {/* Puce « Amis » (restos notés par mes abonnements) */}
+      <Pressable
+        style={[
+          styles.chip,
+          friendsActive && { backgroundColor: ACCENT, borderColor: ACCENT },
+        ]}
+        onPress={onToggleFriends}
+      >
+        <Ionicons
+          name="people"
+          size={13}
+          color={friendsActive ? "#fff" : ACCENT}
+        />
+        <Text style={[styles.label, friendsActive && styles.labelActive]}>
+          Amis
+        </Text>
+      </Pressable>
+
       {(Object.entries(CATEGORY_CONFIG) as [RestaurantCategory, (typeof CATEGORY_CONFIG)[RestaurantCategory]][]).map(
         ([key, config]) => {
           const isActive = activeCategories.includes(key);

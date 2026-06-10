@@ -36,6 +36,8 @@ import {
 } from "../../hooks/useRestaurantSearch";
 import { type RestaurantCategory, getCategoryConfig } from "../../constants/categories";
 import { restaurantsToGeoJSON } from "../../utils/geo";
+import { useFollowingRestaurants } from "../../hooks/useFollowingRestaurants";
+import { boundsOf } from "../../hooks/useUserReviewedRestaurants";
 
 type Coords = { latitude: number; longitude: number };
 
@@ -127,8 +129,9 @@ export default function MapScreen() {
   const [showResults, setShowResults] = useState(false);
   useEffect(() => { showResultsRef.current = showResults; }, [showResults]);
 
-  // ── Filtres catégories ───────────────────────────────────────────────────────
+  // ── Filtres catégories + filtre « Amis » ─────────────────────────────────────
   const [activeCategories, setActiveCategories] = useState<RestaurantCategory[]>([]);
+  const [friendsActive, setFriendsActive] = useState(false);
 
   // ── Visibilité overlay (masqués par la bottom sheet en mid/full) ─────────────
   const [filtersVisible, setFiltersVisible] = useState(true);
@@ -149,6 +152,13 @@ export default function MapScreen() {
   // ── Restaurants (fetch + cache) ──────────────────────────────────────────────
   const { restaurants, loading: restaurantsLoading } = useRestaurants(mapBounds);
 
+  // ── Restaurants notés par mes abonnements (filtre « Amis ») ──────────────────
+  const { restaurants: followingRestaurants, loading: followingLoading } =
+    useFollowingRestaurants(friendsActive);
+
+  // Source affichée : restos d'amis si le filtre est actif, sinon ceux du viewport.
+  const sourceRestaurants = friendsActive ? followingRestaurants : restaurants;
+
   // ── Recherche (debounce 400ms) ───────────────────────────────────────────────
   const { localResults, isLoading: isSearchLoading } =
     useRestaurantSearch(searchQuery, userCoords);
@@ -157,11 +167,11 @@ export default function MapScreen() {
   const visibleRestaurants = useMemo(
     () =>
       activeCategories.length === 0
-        ? restaurants
-        : restaurants.filter((r) =>
+        ? sourceRestaurants
+        : sourceRestaurants.filter((r) =>
             activeCategories.includes(r.category as RestaurantCategory)
           ),
-    [restaurants, activeCategories]
+    [sourceRestaurants, activeCategories]
   );
 
   const restaurantsGeoJSON = useMemo(
@@ -187,6 +197,20 @@ export default function MapScreen() {
       prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category]
     );
   }, []);
+
+  // ── Cadrage auto sur les restos d'amis à l'activation du filtre ──────────────
+  useEffect(() => {
+    if (!friendsActive || followingRestaurants.length === 0) return;
+    const b = boundsOf(followingRestaurants);
+    if (!b) return;
+    const t = setTimeout(() => {
+      cameraRef.current?.fitBounds(
+        [b[0], b[1], b[2], b[3]],
+        { padding: { top: 140, right: 50, bottom: 160, left: 50 }, duration: 600 },
+      );
+    }, 200);
+    return () => clearTimeout(t);
+  }, [friendsActive, followingRestaurants]);
 
   // ── Toast helper ─────────────────────────────────────────────────────────────
   const showToast = useCallback(
@@ -480,7 +504,29 @@ export default function MapScreen() {
           initialViewState={{ center: [4.3517, 50.8503], zoom: 12 }}
         />
 
-        <UserLocation animated={false} />
+        {/* Point de localisation utilisateur — version agrandie (halo blanc + point bleu) */}
+        <UserLocation animated={false}>
+          <Layer
+            type="circle"
+            id="user-loc-halo"
+            paint={{
+              "circle-radius": 14,
+              "circle-color": "#FFFFFF",
+              "circle-pitch-alignment": "map",
+            } as any}
+          />
+          <Layer
+            type="circle"
+            id="user-loc-dot"
+            paint={{
+              "circle-radius": 9,
+              "circle-color": "#1E88E5",
+              "circle-stroke-color": "#FFFFFF",
+              "circle-stroke-width": 2,
+              "circle-pitch-alignment": "map",
+            } as any}
+          />
+        </UserLocation>
 
         <GeoJSONSource
           id="restaurants"
@@ -574,20 +620,29 @@ export default function MapScreen() {
           <FilterBar
             activeCategories={activeCategories}
             onToggle={handleToggleCategory}
+            friendsActive={friendsActive}
+            onToggleFriends={() => setFriendsActive((v) => !v)}
           />
         </View>
       )}
 
       {/* Badge chargement restaurants */}
-      {restaurantsLoading && !showResults && (
+      {(restaurantsLoading || (friendsActive && followingLoading)) && !showResults && (
         <View style={[styles.loadingBadge, { top: insets.top + 68 }]}>
           <ActivityIndicator size="small" color="#E8472A" />
           <Text style={styles.loadingText}>Chargement…</Text>
         </View>
       )}
 
-      {/* Invitation à zoomer */}
-      {showZoomHint && !showResults && (
+      {/* Filtre Amis actif mais aucun resto noté par les abonnements */}
+      {friendsActive && !followingLoading && followingRestaurants.length === 0 && !showResults && (
+        <View style={[styles.zoomHint, { pointerEvents: "none" }]}>
+          <Text style={styles.zoomHintText}>Aucun resto noté par tes abonnements</Text>
+        </View>
+      )}
+
+      {/* Invitation à zoomer (désactivée en mode Amis) */}
+      {showZoomHint && !friendsActive && !showResults && (
         <View style={[styles.zoomHint, { pointerEvents: "none" }]}>
           <Text style={styles.zoomHintText}>Zoomez pour voir les restaurants</Text>
         </View>
