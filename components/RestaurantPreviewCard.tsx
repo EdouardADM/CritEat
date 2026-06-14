@@ -202,6 +202,15 @@ export default function RestaurantPreviewCard({
       }
     });
 
+  // ── Tap → agrandir (fiche plein écran), en plus du swipe-up ───────────────
+  // Échoue si le doigt bouge (maxDistance) → ne se déclenche pas sur un drag/swipe.
+  const tapGesture = Gesture.Tap()
+    .maxDuration(250)
+    .maxDistance(12)
+    .onEnd((_e, success) => {
+      if (success) runOnJS(navigate)();
+    });
+
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
       { translateY: translateY.value },
@@ -212,16 +221,20 @@ export default function RestaurantPreviewCard({
   // ── Rendu ─────────────────────────────────────────────────────────────────
   return (
     <Animated.View style={[styles.wrapper, animatedStyle]}>
-      <GestureDetector gesture={swipeGesture}>
-        <View style={[styles.card, { paddingBottom: bottomInset }]}>
-          {/* Bouton de fermeture explicite */}
-          <Pressable style={styles.closeBtn} onPress={close} hitSlop={8}>
-            <Ionicons name="close" size={18} color="#888" />
-          </Pressable>
+      <View style={[styles.card, { paddingBottom: bottomInset }]}>
+        {/* Bouton de fermeture explicite — placé HORS de la zone tap/swipe pour
+            qu'un tap sur ✕ ferme (et n'agrandisse pas la fiche). */}
+        <Pressable style={styles.closeBtn} onPress={close} hitSlop={8}>
+          <Ionicons name="close" size={18} color="#888" />
+        </Pressable>
 
-          {/* ── Zone draggable ──────────────────────────────────────────── */}
-          <GestureDetector gesture={dragGesture}>
-            <View style={styles.dragArea}>
+        {/* Tap → agrandir (fiche plein écran) ; swipe horizontal → fermer.
+            Le drag vertical reste géré par le GestureDetector imbriqué. */}
+        <GestureDetector gesture={Gesture.Race(swipeGesture, tapGesture)}>
+          <View>
+            {/* ── Zone draggable ──────────────────────────────────────────── */}
+            <GestureDetector gesture={dragGesture}>
+              <View style={styles.dragArea}>
               <View style={styles.dragHandle}>
                 <View style={styles.dragBar} />
               </View>
@@ -271,8 +284,9 @@ export default function RestaurantPreviewCard({
             <Text style={styles.emptyReviewSub}>Glisse vers le haut pour en écrire un.</Text>
           </View>
         )}
-        </View>
-      </GestureDetector>
+          </View>
+        </GestureDetector>
+      </View>
     </Animated.View>
   );
 }
