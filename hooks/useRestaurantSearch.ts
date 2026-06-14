@@ -19,12 +19,16 @@ type UserLocation = { latitude: number; longitude: number };
 
 export function useRestaurantSearch(
   query: string,
-  _userLocation: UserLocation | null,
+  userLocation: UserLocation | null,
 ) {
   const [localResults, setLocalResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Position lue via une ref : on utilise la dernière connue au moment de la
+  // recherche, sans relancer le fetch à chaque mise à jour GPS (toutes les ~5 s).
+  const locationRef = useRef(userLocation);
+  locationRef.current = userLocation;
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -40,8 +44,13 @@ export function useRestaurantSearch(
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(async () => {
       try {
+        const loc = locationRef.current;
         const { data, error } = await supabase
-          .rpc("search_restaurants", { search_query: trimmed });
+          .rpc("search_restaurants", {
+            search_query: trimmed,
+            user_lat: loc?.latitude ?? undefined,
+            user_lng: loc?.longitude ?? undefined,
+          });
 
         if (error) {
           console.error("[useRestaurantSearch] RPC error:", error.message);
