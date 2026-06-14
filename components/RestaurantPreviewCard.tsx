@@ -18,6 +18,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { getCategoryConfig } from "../constants/categories";
 import type { Restaurant } from "../hooks/useRestaurants";
 import { useRestaurantDetail, type ReviewDetail } from "../hooks/useRestaurantDetail";
+import Avatar from "./Avatar";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -55,9 +56,13 @@ function ReviewPreview({ review, accentColor }: { review: ReviewDetail; accentCo
     <View style={styles.reviewPreview}>
       {/* Avatar + username + date */}
       <View style={styles.reviewMeta}>
-        <View style={[styles.avatar, { backgroundColor: accentColor + "20" }]}>
-          <Text style={[styles.avatarText, { color: accentColor }]}>{initials}</Text>
-        </View>
+        <Avatar
+          uri={review.avatar_url}
+          initials={initials}
+          size={24}
+          backgroundColor={accentColor + "20"}
+          textColor={accentColor}
+        />
         <Text style={styles.reviewUsername}>{review.username}</Text>
         {review.is_verified && (
           <Ionicons name="checkmark-circle" size={11} color="#16A34A" />
@@ -400,17 +405,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
-  },
-  avatar: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  avatarText: {
-    fontSize: 9,
-    fontWeight: "700",
   },
   reviewUsername: {
     fontSize: 13,

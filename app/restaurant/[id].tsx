@@ -22,6 +22,7 @@ import { useReviewVote, type VoteValue } from "../../hooks/useReviewVote";
 import { useAuth } from "../../context/AuthContext";
 import ReviewPhotosModal from "../../components/ReviewPhotosModal";
 import KarmaBadge from "../../components/KarmaBadge";
+import Avatar from "../../components/Avatar";
 import { checkDistanceToRestaurant, type DistanceCheckResult } from "../../hooks/useDistanceCheck";
 import DistanceGateModal from "../../components/review/DistanceGateModal";
 
@@ -472,9 +473,13 @@ function ReviewCard({
     <View style={styles.reviewCard}>
       {/* En-tête */}
       <View style={styles.reviewHeader}>
-        <View style={[styles.avatar, { backgroundColor: accentColor + "20" }]}>
-          <Text style={[styles.avatarText, { color: accentColor }]}>{initials}</Text>
-        </View>
+        <Avatar
+          uri={review.avatar_url}
+          initials={initials}
+          size={36}
+          backgroundColor={accentColor + "20"}
+          textColor={accentColor}
+        />
 
         {/* Nom + date + score pill — occupe tout l'espace disponible */}
         <View style={styles.reviewMeta}>
@@ -902,17 +907,6 @@ const styles = StyleSheet.create({
   reviewPhotoBadgeText: {
     color: "#fff",
     fontSize: 12,
-    fontWeight: "700",
-  },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  avatarText: {
-    fontSize: 13,
     fontWeight: "700",
   },
   reviewNameRow: {

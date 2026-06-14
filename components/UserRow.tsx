@@ -5,6 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useFollow } from "../hooks/useFollow";
 import { getKarma } from "../constants/karma";
+import Avatar from "./Avatar";
 
 export type UserRowItem = {
   id: string;
@@ -55,9 +56,13 @@ export default function UserRow({
         style={styles.body}
         onPress={() => router.push(`/profile/${item.id}`)}
       >
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{initials}</Text>
-        </View>
+        <Avatar
+          uri={item.avatar_url}
+          initials={initials}
+          size={46}
+          backgroundColor="#F0F0F0"
+          textColor="#555"
+        />
         <View style={styles.info}>
           <Text style={styles.username} numberOfLines={1}>{item.username}</Text>
           <View style={styles.metaRow}>
@@ -98,19 +103,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 14,
-  },
-  avatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: "#F0F0F0",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  avatarText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#555",
   },
   info: {
     flex: 1,
