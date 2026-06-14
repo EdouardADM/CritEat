@@ -5,13 +5,13 @@ import {
   Image,
   Modal,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   View,
   type NativeSyntheticEvent,
   type NativeScrollEvent,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 
 type Photo = { url: string; position: number };

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -8,7 +8,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../context/AuthContext";
@@ -77,6 +77,20 @@ export default function ProfileView({ userId }: { userId: string }) {
 
   const [infoVisible, setInfoVisible] = useState(false);
   const [following, setFollowing] = useState(false);
+
+  // Rafraîchit le profil chaque fois que l'écran reprend le focus (ex. retour
+  // de l'écran d'édition) → bio/avatar/username à jour sans relancer l'app.
+  // On saute le tout premier focus : le fetch initial est déjà fait au montage.
+  const isFirstFocus = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (isFirstFocus.current) {
+        isFirstFocus.current = false;
+        return;
+      }
+      refetch();
+    }, [refetch])
+  );
 
   // Synchronise l'état de suivi optimiste avec la donnée serveur.
   useEffect(() => {
@@ -224,13 +238,6 @@ export default function ProfileView({ userId }: { userId: string }) {
 
       {/* ── Carte des restos notés ────────────────────────────────────────── */}
       <ProfileMiniMap userId={userId} />
-
-      {/* ── Activité récente (placeholder Phase D) ───────────────────────── */}
-      {/* TODO Phase D — liste des avis récents */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Activité récente</Text>
-        <Text style={styles.placeholderText}>Avis récents à venir</Text>
-      </View>
 
       {/* ── Actions ──────────────────────────────────────────────────────── */}
       <View style={styles.actions}>
@@ -432,39 +439,10 @@ const styles = StyleSheet.create({
     color: ACCENT,
   },
 
-  // ── Placeholder ────────────────────────────────────────────────────────────
-  placeholder: {
-    height: 200,
-    backgroundColor: "#F3F4F6",
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    marginBottom: 16,
-  },
-  placeholderText: {
-    fontSize: 13,
-    color: "#9CA3AF",
-    fontStyle: "italic",
-  },
-
-  // ── Section ────────────────────────────────────────────────────────────────
-  section: {
-    backgroundColor: "#F9FAFB",
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 24,
-    gap: 8,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#374151",
-  },
-
   // ── Actions ────────────────────────────────────────────────────────────────
   actions: {
     gap: 12,
+    marginTop: 20,
   },
   btnPrimary: {
     backgroundColor: ACCENT,

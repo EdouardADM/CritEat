@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useRef } from "react";
 import {
-  Animated,
-  PanResponder,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { getCategoryConfig } from "../constants/categories";
@@ -104,25 +110,13 @@ export default function RestaurantPreviewCard({
   const { reviews, loading } = useRestaurantDetail(restaurant.id);
   const latestReview = reviews[0] ?? null;
 
-  // ── Animations ───────────────────────────────────────────────────────────
-  const translateY = useRef(new Animated.Value(300)).current;
-  const slideX     = useRef(new Animated.Value(0)).current;
+  // ── Animations (reanimated, thread UI) ────────────────────────────────────
+  const translateY = useSharedValue(300);
+  const translateX = useSharedValue(0);
 
-  useEffect(() => {
-    Animated.spring(translateY, {
-      toValue: 0,
-      useNativeDriver: true,
-      tension: 65,
-      friction: 11,
-    }).start();
-  }, [translateY]);
-
-  // Retour sur la map après navigation → remet la card en position peek
-  useFocusEffect(
-    useCallback(() => {
-      translateY.setValue(0);
-    }, [translateY])
-  );
+  // Ressort nettement sur-amorti (damping élevé p/r à stiffness) → aucune
+  // oscillation : décélération douce à l'ouverture, sans rebond perceptible.
+  const SPRING = { damping: 42, stiffness: 200 } as const;
 
   // ── Refs pour éviter stale closures ──────────────────────────────────────
   const onCloseRef = useRef(onClose);
@@ -131,103 +125,116 @@ export default function RestaurantPreviewCard({
   routerRef.current = router;
   const restaurantIdRef = useRef(restaurant.id);
   restaurantIdRef.current = restaurant.id;
+  // Garde anti double-déclenchement : empêche qu'une seconde animation/geste
+  // rappelle onClose/navigate alors qu'une transition est déjà en cours.
+  const isLeaving = useRef(false);
 
-  // ── PanResponder vertical ─────────────────────────────────────────────────
-  // Swipe up (dy < -50 ou vy < -0.5) → navigate vers la fiche plein écran
-  // Swipe down (dy > 80 ou vy > 0.5) → ferme
-  // Sinon → spring back à 0
-  // Pendant le drag : la card suit le doigt (translateY borné à [-30, +400])
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, { dy }) => Math.abs(dy) > 5,
-      onPanResponderMove: (_, { dy }) => {
-        const clamped = Math.min(Math.max(dy, -30), 400);
-        translateY.setValue(clamped);
-      },
-      onPanResponderRelease: (_, { dy, vy }) => {
-        if (dy < -50 || vy < -0.5) {
-          // Swipe up → navigate
-          Animated.timing(translateY, {
-            toValue: -400,
-            duration: 180,
-            useNativeDriver: true,
-          }).start(() => {
-            routerRef.current.push(`/restaurant/${restaurantIdRef.current}`);
-          });
-        } else if (dy > 80 || vy > 0.5) {
-          // Swipe down → ferme
-          Animated.timing(translateY, {
-            toValue: 600,
-            duration: 200,
-            useNativeDriver: true,
-          }).start(() => onCloseRef.current());
-        } else {
-          // Spring back
-          Animated.spring(translateY, {
-            toValue: 0,
-            useNativeDriver: true,
-            tension: 80,
-            friction: 12,
-          }).start();
-        }
-      },
-    })
-  ).current;
+  // Entrée : la card monte de 300 → 0. Card keyée par id côté map → se rejoue
+  // proprement à chaque sélection.
+  useEffect(() => {
+    translateY.value = withSpring(0, SPRING);
+  }, [translateY]);
 
-  // ── PanResponder horizontal (swipe right → ferme) ────────────────────────
-  const swipePanResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, { dx, dy }) =>
-        dx > 30 && Math.abs(dx) > Math.abs(dy),
-      onPanResponderRelease: (_, { dx }) => {
-        if (dx > 80) {
-          Animated.timing(slideX, {
-            toValue: 400,
-            duration: 200,
-            useNativeDriver: true,
-          }).start(() => onCloseRef.current());
-        }
-      },
+  // Retour sur la map après navigation (swipe-up) → la card est restée montée
+  // hors écran (translateY -400) : on la repositionne et on relâche la garde.
+  useFocusEffect(
+    useCallback(() => {
+      isLeaving.current = false;
+      translateY.value = withSpring(0, SPRING);
+      translateX.value = 0;
+    }, [translateY, translateX])
+  );
+
+  const close = useCallback(() => {
+    if (isLeaving.current) return;
+    isLeaving.current = true;
+    onCloseRef.current();
+  }, []);
+
+  const navigate = useCallback(() => {
+    if (isLeaving.current) return;
+    isLeaving.current = true;
+    routerRef.current.push(`/restaurant/${restaurantIdRef.current}`);
+  }, []);
+
+  // ── Geste vertical (drag) ─────────────────────────────────────────────────
+  // S'active seulement sur un mouvement vertical délibéré (≥15px), échoue si le
+  // geste part en horizontal. Swipe-up → fiche, swipe-down → ferme, sinon retour.
+  const dragGesture = Gesture.Pan()
+    .activeOffsetY([-15, 15])
+    .failOffsetX([-25, 25])
+    .onUpdate((e) => {
+      translateY.value = Math.min(Math.max(e.translationY, -60), 400);
     })
-  ).current;
+    .onEnd((e) => {
+      if (e.translationY < -60 || e.velocityY < -800) {
+        translateY.value = withTiming(-400, { duration: 180 }, (done) => {
+          if (done) runOnJS(navigate)();
+        });
+      } else if (e.translationY > 100 || e.velocityY > 800) {
+        translateY.value = withTiming(600, { duration: 200 }, (done) => {
+          if (done) runOnJS(close)();
+        });
+      } else {
+        translateY.value = withSpring(0, SPRING);
+      }
+    });
+
+  // ── Geste horizontal (swipe droite → ferme) ───────────────────────────────
+  const swipeGesture = Gesture.Pan()
+    .activeOffsetX(25)
+    .failOffsetY([-15, 15])
+    .onUpdate((e) => {
+      translateX.value = Math.max(e.translationX, 0);
+    })
+    .onEnd((e) => {
+      if (e.translationX > 80 || e.velocityX > 800) {
+        translateX.value = withTiming(400, { duration: 200 }, (done) => {
+          if (done) runOnJS(close)();
+        });
+      } else {
+        translateX.value = withSpring(0, SPRING);
+      }
+    });
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateY: translateY.value },
+      { translateX: translateX.value },
+    ],
+  }));
 
   // ── Rendu ─────────────────────────────────────────────────────────────────
   return (
-    <Animated.View
-      style={[styles.wrapper, { transform: [{ translateY }, { translateX: slideX }] }]}
-    >
-      <Animated.View
-        {...swipePanResponder.panHandlers}
-        style={[styles.card, { paddingBottom: bottomInset }]}
-      >
-        {/* Bouton de fermeture explicite */}
-        <Pressable
-          style={styles.closeBtn}
-          onPress={() => onCloseRef.current()}
-          hitSlop={8}
-        >
-          <Ionicons name="close" size={18} color="#888" />
-        </Pressable>
+    <Animated.View style={[styles.wrapper, animatedStyle]}>
+      <GestureDetector gesture={swipeGesture}>
+        <View style={[styles.card, { paddingBottom: bottomInset }]}>
+          {/* Bouton de fermeture explicite */}
+          <Pressable style={styles.closeBtn} onPress={close} hitSlop={8}>
+            <Ionicons name="close" size={18} color="#888" />
+          </Pressable>
 
-        {/* ── Zone draggable ────────────────────────────────────────────── */}
-        <View {...panResponder.panHandlers} style={styles.dragArea}>
-          <View style={styles.dragHandle}>
-            <View style={styles.dragBar} />
-          </View>
-
-          {/* Titre + score global */}
-          <View style={styles.headerRow}>
-            <Text style={styles.name} numberOfLines={1}>{restaurant.name}</Text>
-            {restaurant.composite_score != null && (
-              <View style={styles.scorePill}>
-                <Ionicons name="star" size={12} color="#E8472A" />
-                <Text style={styles.scorePillText}>
-                  {restaurant.composite_score.toFixed(1)}
-                </Text>
+          {/* ── Zone draggable ──────────────────────────────────────────── */}
+          <GestureDetector gesture={dragGesture}>
+            <View style={styles.dragArea}>
+              <View style={styles.dragHandle}>
+                <View style={styles.dragBar} />
               </View>
-            )}
-          </View>
-        </View>
+
+              {/* Titre + score global */}
+              <View style={styles.headerRow}>
+                <Text style={styles.name} numberOfLines={1}>{restaurant.name}</Text>
+                {restaurant.composite_score != null && (
+                  <View style={styles.scorePill}>
+                    <Ionicons name="star" size={12} color="#E8472A" />
+                    <Text style={styles.scorePillText}>
+                      {restaurant.composite_score.toFixed(1)}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          </GestureDetector>
 
         {/* ── Info restaurant ──────────────────────────────────────────── */}
         <View style={styles.infoBlock}>
@@ -259,7 +266,8 @@ export default function RestaurantPreviewCard({
             <Text style={styles.emptyReviewSub}>Glisse vers le haut pour en écrire un.</Text>
           </View>
         )}
-      </Animated.View>
+        </View>
+      </GestureDetector>
     </Animated.View>
   );
 }

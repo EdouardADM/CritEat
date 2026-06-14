@@ -3,7 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Keyboard,
+  Linking,
   type NativeSyntheticEvent,
   Pressable,
   StyleSheet,
@@ -15,7 +17,7 @@ import {
   Camera,
   GeoJSONSource,
   Layer,
-  UserLocation,
+  ViewAnnotation,
   type MapRef,
   type CameraRef,
   type ViewStateChangeEvent,
@@ -36,6 +38,7 @@ import { type RestaurantCategory } from "../../constants/categories";
 import { restaurantsToGeoJSON } from "../../utils/geo";
 import { useFollowingRestaurants } from "../../hooks/useFollowingRestaurants";
 import { boundsOf } from "../../hooks/useUserReviewedRestaurants";
+import { useMyAvatar } from "../../hooks/useMyAvatar";
 
 type Coords = { latitude: number; longitude: number };
 
@@ -100,14 +103,20 @@ export default function MapScreen() {
   const cameraRef = useRef<CameraRef>(null);
   const searchBarRef = useRef<SearchBarHandle>(null);
 
-  const isRestaurantSelectedRef = useRef(false);
-  const selectedRestaurantRef = useRef<Restaurant | null>(null);
+  // Miroir synchrone de l'id du resto sélectionné — UNIQUE source de gate lue
+  // dans les callbacks à deps vides (handleRegionChange / handleScaleUpdate).
+  // "" = aucune sélection. Mis à jour exclusivement par openPreview/closePreview.
+  const selectedIdRef = useRef("");
+  // Caméra recentrée une seule fois sur l'utilisateur (au 1er fix de position).
+  const didInitialCenterRef = useRef(false);
   const showResultsRef = useRef(false);
-  const ignoreNextQueryChangeRef = useRef(false);
 
   // ── GPS ─────────────────────────────────────────────────────────────────────
   const [userCoords, setUserCoords] = useState<Coords | null>(null);
   const [locationLoading, setLocationLoading] = useState(true);
+  // Passe à true une fois la permission accordée → débloque le suivi en direct
+  // (évite un second prompt système dans l'effet de watch).
+  const [hasLocationPermission, setHasLocationPermission] = useState(false);
 
   // ── Carte ───────────────────────────────────────────────────────────────────
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
@@ -130,8 +139,24 @@ export default function MapScreen() {
   const [searchVisible, setSearchVisible]   = useState(true);
 
   // ── Fiche restaurant ────────────────────────────────────────────────────────
+  // `selectedRestaurant` (state) est l'UNIQUE pilote de visibilité de l'aperçu.
+  // Toute ouverture/fermeture passe par openPreview/closePreview, qui mettent à
+  // jour `selectedIdRef` de façon synchrone (le gate de handleRegionChange doit
+  // être à jour AVANT que la caméra ne se stabilise après le flyTo).
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
-  useEffect(() => { selectedRestaurantRef.current = selectedRestaurant; }, [selectedRestaurant]);
+
+  const openPreview = useCallback((restaurant: Restaurant) => {
+    selectedIdRef.current = restaurant.id;
+    setSelectedRestaurant(restaurant);
+  }, []);
+
+  const closePreview = useCallback(() => {
+    selectedIdRef.current = "";
+    setSelectedRestaurant(null);
+    // Restaure les overlays masqués par la bottom sheet.
+    setFiltersVisible(true);
+    setSearchVisible(true);
+  }, []);
 
   // ── Échelle de carte ────────────────────────────────────────────────────────
   const [scaleBar, setScaleBar] = useState(() => computeScaleBar(12, 50.8503));
@@ -145,6 +170,9 @@ export default function MapScreen() {
 
   // Source affichée : restos d'amis si le filtre est actif, sinon ceux du viewport.
   const sourceRestaurants = friendsActive ? followingRestaurants : restaurants;
+
+  // Avatar de l'utilisateur courant (marqueur de position).
+  const { avatarUrl, username } = useMyAvatar();
 
   // ── Recherche (debounce 400ms) ───────────────────────────────────────────────
   const { localResults, isLoading: isSearchLoading } =
@@ -202,7 +230,7 @@ export default function MapScreen() {
         setScaleBar(computeScaleBar(zoom, (bounds[3] + bounds[1]) / 2));
       });
       // Ferme le clavier seulement si l'utilisateur pan/zoom manuellement
-      if (!isRestaurantSelectedRef.current) {
+      if (!selectedIdRef.current) {
         Keyboard.dismiss();
         searchBarRef.current?.blur();
       }
@@ -223,7 +251,9 @@ export default function MapScreen() {
       });
       // Échelle : mise à jour finale (sync avec les bounds)
       setScaleBar(computeScaleBar(zoom, (bounds[3] + bounds[1]) / 2));
-      if (isRestaurantSelectedRef.current) return;
+      // Tant qu'un aperçu est ouvert, on fige les bounds : pas de refetch ni de
+      // cascade de re-renders pendant que la card est affichée.
+      if (selectedIdRef.current) return;
       setMapBounds({
         minLat: bounds[1],
         minLng: bounds[0],
@@ -252,62 +282,112 @@ export default function MapScreen() {
   }, []);
 
   // ── Init GPS ─────────────────────────────────────────────────────────────────
-  // La carte s'affiche immédiatement (centrée sur Bruxelles).
-  // Dès que le GPS répond, on vole vers la position réelle.
-  // Timeout 8s → fallback Bruxelles + Alert.
+  // La localisation est requise. Flux « priming » : on affiche d'abord notre
+  // popup d'explication ; OK déclenche le VRAI dialogue système (Autoriser /
+  // Refuser). iOS n'autorise ce dialogue qu'UNE fois : si l'utilisateur a déjà
+  // refusé définitivement (canAskAgain = false), on propose d'ouvrir les Réglages
+  // (bouton direct, pas « va le faire toi-même »).
   useEffect(() => {
-    const BRUSSELS: [number, number] = [4.3517, 50.8503];
-    const fallback = () => {
-      moveCameraTo(BRUSSELS, 12, "flyTo", 400);
-      setUserCoords({ latitude: 50.8503, longitude: 4.3517 });
-      setLocationLoading(false);
-    };
-
-    const timeoutId = setTimeout(() => {
-      Alert.alert("Position non disponible", "Affichage centré sur Bruxelles.");
-      fallback();
-    }, 8000);
-
+    let cancelled = false;
     (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        clearTimeout(timeoutId);
-        Alert.alert("Position non disponible", "Affichage centré sur Bruxelles.");
-        fallback();
+      // 1. État actuel SANS déclencher de prompt.
+      let perm = await Location.getForegroundPermissionsAsync();
+
+      // 2. Tant qu'on peut encore demander → popup d'explication, puis dialogue OS.
+      if (perm.status !== "granted" && perm.canAskAgain) {
+        const accepted = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            "Localisation requise",
+            "CritEat a besoin de ta position pour afficher les restaurants autour de toi.",
+            [
+              { text: "Plus tard", style: "cancel", onPress: () => resolve(false) },
+              { text: "OK", onPress: () => resolve(true) },
+            ],
+            { cancelable: false },
+          );
+        });
+        if (cancelled) return;
+        if (!accepted) {
+          setLocationLoading(false);
+          return;
+        }
+        // Dialogue système natif (Autoriser / Refuser).
+        perm = await Location.requestForegroundPermissionsAsync();
+        if (cancelled) return;
+      }
+
+      // 3. Toujours pas accordé → refus définitif : seule issue iOS, les Réglages.
+      if (perm.status !== "granted") {
+        setLocationLoading(false);
+        Alert.alert(
+          "Localisation désactivée",
+          "Active la localisation pour CritEat afin de voir les restaurants autour de toi.",
+          [
+            { text: "Annuler", style: "cancel" },
+            { text: "Ouvrir les Réglages", onPress: () => Linking.openSettings() },
+          ],
+        );
         return;
       }
-      let hadLastKnown = false;
+
+      // 4. Accordé → débloque le suivi en direct et récupère la position.
+      setHasLocationPermission(true);
       try {
-        // Passe 1 : position en cache OS (instantané)
+        // Position en cache OS (instantané), puis fix précis. Le centrage de la
+        // caméra et le masquage de l'overlay sont gérés par l'effet sur userCoords
+        // (peu importe quelle source fournit la position en premier).
         const last = await Location.getLastKnownPositionAsync();
-        if (last) {
-          hadLastKnown = true;
-          clearTimeout(timeoutId);
-          const coords = { latitude: last.coords.latitude, longitude: last.coords.longitude };
-          setUserCoords(coords);
-          moveCameraTo([coords.longitude, coords.latitude], 14, "flyTo", 400);
-          setLocationLoading(false);
+        if (last && !cancelled) {
+          setUserCoords({ latitude: last.coords.latitude, longitude: last.coords.longitude });
         }
-        // Passe 2 : fix précis en arrière-plan
         const fresh = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
+          accuracy: Location.Accuracy.High,
         });
-        clearTimeout(timeoutId);
-        const coords = { latitude: fresh.coords.latitude, longitude: fresh.coords.longitude };
-        setUserCoords(coords);
-        if (!hadLastKnown) {
-          moveCameraTo([coords.longitude, coords.latitude], 14, "flyTo", 400);
-          setLocationLoading(false);
-        }
+        if (cancelled) return;
+        setUserCoords({ latitude: fresh.coords.latitude, longitude: fresh.coords.longitude });
       } catch {
-        clearTimeout(timeoutId);
-        fallback();
+        if (cancelled) return;
+        setLocationLoading(false);
+        Alert.alert(
+          "Localisation indisponible",
+          "Impossible d'obtenir ta position pour le moment. Vérifie que la localisation est activée et réessaie.",
+        );
       }
     })();
 
-    return () => clearTimeout(timeoutId);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { cancelled = true; };
   }, []);
+
+  // ── Suivi de la position en direct (met à jour le marqueur avatar) ───────────
+  // Ne démarre qu'une fois la permission accordée (via l'effet d'init) → pas de
+  // second dialogue système concurrent.
+  useEffect(() => {
+    if (!hasLocationPermission) return;
+    let sub: Location.LocationSubscription | null = null;
+    (async () => {
+      sub = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.High, distanceInterval: 8, timeInterval: 5000 },
+        (p) =>
+          setUserCoords({
+            latitude: p.coords.latitude,
+            longitude: p.coords.longitude,
+          }),
+      );
+    })();
+    return () => { sub?.remove(); };
+  }, [hasLocationPermission]);
+
+  // Dès qu'une position est disponible (peu importe la source : fix initial ou
+  // suivi en direct), on masque l'overlay ET on centre/zoome la caméra sur
+  // l'utilisateur — UNE seule fois, pour ne pas gêner le pan ensuite.
+  useEffect(() => {
+    if (!userCoords) return;
+    setLocationLoading(false);
+    if (!didInitialCenterRef.current) {
+      didInitialCenterRef.current = true;
+      moveCameraTo([userCoords.longitude, userCoords.latitude], 15, "flyTo", 600);
+    }
+  }, [userCoords, moveCameraTo]);
 
   // ── Tap sur un restaurant ────────────────────────────────────────────────────
   // Ouvre TOUJOURS l'aperçu du resto tapé (ou bascule vers un autre). On ne ferme
@@ -316,8 +396,7 @@ export default function MapScreen() {
     if (!feature) return;
     const props = feature.properties;
     const [lng, lat] = feature.geometry.coordinates as [number, number];
-    isRestaurantSelectedRef.current = true;
-    setSelectedRestaurant({
+    openPreview({
       id: props.id, place_id: props.place_id, name: props.name,
       category: props.category, address: props.address, city: props.city,
       latitude: lat, longitude: lng,
@@ -326,44 +405,19 @@ export default function MapScreen() {
       review_count: props.review_count,
     });
     moveCameraTo([lng, lat], 16, "flyTo", 350);
-  }, [moveCameraTo]);
+  }, [openPreview, moveCameraTo]);
 
-  // ── Tap sur la carte ─────────────────────────────────────────────────────────
-  // v11 : onPress fournit event.nativeEvent.point = [x, y]. On interroge une BOÎTE
-  // de pixels autour du doigt (tolérance) pour viser un marqueur plus facilement.
-  const handleMapPress = useCallback(async (event: any) => {
+  // ── Tap sur le fond de carte ─────────────────────────────────────────────────
+  // La détection d'un marqueur se fait via le onPress natif de la GeoJSONSource
+  // (hit-test fiable). Ici on ne gère QUE la fermeture des résultats de recherche.
+  // Un tap sur le fond ne ferme pas l'aperçu (fermeture via ✕ ou swipe).
+  const handleMapPress = useCallback(() => {
     if (showResultsRef.current) {
       Keyboard.dismiss();
       searchBarRef.current?.blur();
       setShowResults(false);
-      return;
     }
-
-    const [x, y] = event.nativeEvent.point as [number, number];
-    const HIT = 14; // px de tolérance autour du tap
-    const box: [[number, number], [number, number]] = [
-      [x - HIT, y - HIT],
-      [x + HIT, y + HIT],
-    ];
-
-    try {
-      const features = await mapRef.current?.queryRenderedFeatures(
-        box,
-        { layers: ["restaurant-points"] }
-      );
-
-      if (features && features.length > 0) {
-        handleRestaurantPress(features[0]);
-        return;
-      }
-    } catch (e) {
-      console.warn("Erreur de détection du clic:", e);
-    }
-
-    // Un tap sur le fond de carte ne ferme PAS l'aperçu : on évite ainsi qu'un
-    // onPress parasite de MapLibre le referme juste après l'ouverture. La fermeture
-    // se fait par le bouton ✕ ou un swipe sur la carte d'aperçu.
-  }, [handleRestaurantPress]);
+  }, []);
 
   // ── Recentrer sur l'utilisateur ──────────────────────────────────────────────
   const handleRecenter = useCallback(() => {
@@ -374,61 +428,52 @@ export default function MapScreen() {
 
   // ── Sélection résultat local ─────────────────────────────────────────────────
   const handleSelectLocal = useCallback((result: SearchResult) => {
-    // 1. Ferme tout d'abord — laisse React re-render sans backdrop
+    // Flux synchrone, sans setTimeout : on ferme la recherche, on ouvre
+    // l'aperçu (openPreview pose le gate selectedIdRef de façon synchrone) puis
+    // on charge UNE fois les restos autour de la position. La caméra qui se
+    // stabilise après le flyTo ne réécrira pas les bounds : handleRegionChange
+    // est désormais gated tant qu'un aperçu est ouvert.
     setShowResults(false);
     setSearchQuery("");
     Keyboard.dismiss();
-    ignoreNextQueryChangeRef.current = true;
-    setTimeout(() => { ignoreNextQueryChangeRef.current = false; }, 1000);
     searchBarRef.current?.blur();
 
-    // 2. Monte la preview card après que le backdrop est démonté
-    setTimeout(() => {
-      isRestaurantSelectedRef.current = true;
-      setSelectedRestaurant({
-        id: result.id,
-        place_id: result.place_id,
-        name: result.name,
-        category: result.category as any,
-        address: result.address,
-        city: result.city,
-        latitude: result.lat,
-        longitude: result.lng,
-        composite_score: result.composite_score,
-        popularity_score: result.popularity_score,
-        review_count: result.review_count,
-      });
-      moveCameraTo([result.lng, result.lat], 16, "flyTo", 400);
-    }, 0);
-
-    // 3. Force le fetch des restaurants autour de la nouvelle position
-    setTimeout(() => {
-      isRestaurantSelectedRef.current = false;
-      setMapBounds({
-        minLat: result.lat - 0.005,
-        minLng: result.lng - 0.008,
-        maxLat: result.lat + 0.005,
-        maxLng: result.lng + 0.008,
-        zoom: 16,
-      });
-      isRestaurantSelectedRef.current = true;
-    }, 500);
-  }, [moveCameraTo]);
+    openPreview({
+      id: result.id,
+      place_id: result.place_id,
+      name: result.name,
+      category: result.category as any,
+      address: result.address,
+      city: result.city,
+      latitude: result.lat,
+      longitude: result.lng,
+      composite_score: result.composite_score,
+      popularity_score: result.popularity_score,
+      review_count: result.review_count,
+    });
+    moveCameraTo([result.lng, result.lat], 16, "flyTo", 400);
+    setMapBounds({
+      minLat: result.lat - 0.005,
+      minLng: result.lng - 0.008,
+      maxLat: result.lat + 0.005,
+      maxLng: result.lng + 0.008,
+      zoom: 16,
+    });
+  }, [openPreview, moveCameraTo]);
 
   // ── Handlers recherche ───────────────────────────────────────────────────────
+  // La frappe ne touche PLUS à l'aperçu (découplage) : la fermeture liée à la
+  // recherche est déclenchée uniquement, et de façon déterministe, au focus.
   const handleQueryChange = useCallback((text: string) => {
-    if (ignoreNextQueryChangeRef.current) {
-      ignoreNextQueryChangeRef.current = false;
-      return;
-    }
     setSearchQuery(text);
     setShowResults(text.trim().length >= 3);
-    if (text.trim().length > 0) setSelectedRestaurant(null);
   }, []);
 
   const handleSearchFocus = useCallback(() => {
+    // L'utilisateur ouvre la recherche → on ferme l'aperçu (action explicite).
+    if (selectedIdRef.current) closePreview();
     if (searchQuery.trim().length >= 3) setShowResults(true);
-  }, [searchQuery]);
+  }, [closePreview, searchQuery]);
 
   const handleClear = useCallback(() => {
     Keyboard.dismiss();
@@ -460,33 +505,38 @@ export default function MapScreen() {
           initialViewState={{ center: [4.3517, 50.8503], zoom: 12 }}
         />
 
-        {/* Point de localisation utilisateur — version agrandie (halo blanc + point bleu) */}
-        <UserLocation animated={false}>
-          <Layer
-            type="circle"
-            id="user-loc-halo"
-            paint={{
-              "circle-radius": 14,
-              "circle-color": "#FFFFFF",
-              "circle-pitch-alignment": "map",
-            } as any}
-          />
-          <Layer
-            type="circle"
-            id="user-loc-dot"
-            paint={{
-              "circle-radius": 9,
-              "circle-color": "#1E88E5",
-              "circle-stroke-color": "#FFFFFF",
-              "circle-stroke-width": 2,
-              "circle-pitch-alignment": "map",
-            } as any}
-          />
-        </UserLocation>
+        {/* Marqueur de position : avatar de profil (initiales en repli). Non-cliquable
+            (pointerEvents none) → n'intercepte pas les taps sur les restaurants. */}
+        {userCoords && (
+          <ViewAnnotation
+            lngLat={[userCoords.longitude, userCoords.latitude]}
+            anchor="center"
+          >
+            <View style={styles.meMarker} pointerEvents="none">
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.meAvatar} />
+              ) : (
+                <View style={[styles.meAvatar, styles.meAvatarFallback]}>
+                  <Text style={styles.meInitials}>
+                    {(username ?? "?").slice(0, 2).toUpperCase()}
+                  </Text>
+                </View>
+              )}
+            </View>
+          </ViewAnnotation>
+        )}
 
         <GeoJSONSource
           id="restaurants"
           data={restaurantsGeoJSON as any}
+          // Détection de tap fiable (hit-test natif) : renvoie directement la feature,
+          // sans queryRenderedFeatures (qui plantait par intermittence).
+          // Hitbox élargie (~64×64 au lieu de 44×44 par défaut) pour viser plus facilement.
+          hitbox={{ top: 32, right: 32, bottom: 32, left: 32 }}
+          onPress={(e: any) => {
+            const f = e?.nativeEvent?.features?.[0];
+            if (f) handleRestaurantPress(f);
+          }}
         >
           {/*
             Affichage progressif style Google Maps :
@@ -606,17 +656,14 @@ export default function MapScreen() {
         </Pressable>
       )}
 
-      {/* Preview restaurant au tap */}
+      {/* Preview restaurant au tap — keyée par id : chaque sélection remonte
+          proprement (animation d'entrée déterministe, pas de shared value
+          périmée au passage resto A → resto B). */}
       {selectedRestaurant && (
         <RestaurantPreviewCard
+          key={selectedRestaurant.id}
           restaurant={selectedRestaurant}
-          onClose={() => {
-            isRestaurantSelectedRef.current = false;
-            setSelectedRestaurant(null);
-            // Restaure les overlays masqués par la bottom sheet
-            setFiltersVisible(true);
-            setSearchVisible(true);
-          }}
+          onClose={closePreview}
           bottomInset={insets.bottom}
         />
       )}
@@ -651,6 +698,35 @@ export default function MapScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
+
+  // ── Marqueur de position (avatar) ──────────────────────────────────────────
+  meMarker: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  meAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 3,
+    borderColor: "#FFFFFF",
+    backgroundColor: "#E5E7EB",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  meAvatarFallback: {
+    backgroundColor: "#E8472A",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  meInitials: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "700",
+  },
 
   // ── Overlay localisation ───────────────────────────────────────────────────
   locationOverlay: {
