@@ -16,7 +16,11 @@
       }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://mcjwszbqwfybrxupkjvn.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_2yRR99UWfdlfBVOb-wxzwA_iHgqqx9O"
+      }
     }
   },
   "submit": {
