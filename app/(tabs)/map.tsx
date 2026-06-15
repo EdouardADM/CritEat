@@ -17,7 +17,7 @@ import {
   Camera,
   GeoJSONSource,
   Layer,
-  ViewAnnotation,
+  Marker,
   type MapRef,
   type CameraRef,
   type ViewStateChangeEvent,
@@ -508,7 +508,9 @@ export default function MapScreen() {
         {/* Marqueur de position : avatar de profil (initiales en repli). Non-cliquable
             (pointerEvents none) → n'intercepte pas les taps sur les restaurants. */}
         {userCoords && (
-          <ViewAnnotation
+          // Marker (vue native LIVE, pas un instantané comme ViewAnnotation) →
+          // l'image de profil async s'affiche correctement sur Android.
+          <Marker
             lngLat={[userCoords.longitude, userCoords.latitude]}
             anchor="center"
           >
@@ -523,7 +525,7 @@ export default function MapScreen() {
                 </View>
               )}
             </View>
-          </ViewAnnotation>
+          </Marker>
         )}
 
         <GeoJSONSource
