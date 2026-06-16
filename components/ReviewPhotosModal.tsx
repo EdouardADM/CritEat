@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   Dimensions,
   FlatList,
@@ -11,7 +11,15 @@ import {
   type NativeSyntheticEvent,
   type NativeScrollEvent,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import { GestureHandlerRootView, Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
 
 type Photo = { url: string; position: number };
@@ -24,6 +32,8 @@ type Props = {
 };
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
+const SCREEN_HEIGHT = Dimensions.get("window").height;
+const DISMISS_THRESHOLD = 120; // px de drag vertical pour fermer
 
 export default function ReviewPhotosModal({
   visible,
@@ -33,6 +43,9 @@ export default function ReviewPhotosModal({
 }: Props) {
   const [activeIndex, setActiveIndex] = useState(initialIndex);
 
+  // Drag vertical pour fermer (translateY ; le fond s'estompe avec le drag).
+  const translateY = useSharedValue(0);
+
   const handleMomentumScrollEnd = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
       const index = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
@@ -41,10 +54,38 @@ export default function ReviewPhotosModal({
     []
   );
 
-  // Remet l'index à 0 (ou initialIndex) à chaque ouverture
+  // Remet l'index à 0 (ou initialIndex) et la position à chaque ouverture
   const handleShow = useCallback(() => {
     setActiveIndex(initialIndex);
-  }, [initialIndex]);
+    translateY.value = 0;
+  }, [initialIndex, translateY]);
+
+  // Swipe vers le bas → ferme. activeOffsetY : ne s'active que sur un mouvement
+  // vertical net ; failOffsetX : laisse le carrousel gérer le swipe horizontal.
+  const dismissGesture = Gesture.Pan()
+    .activeOffsetY([15, 15])
+    .failOffsetX([-20, 20])
+    .onUpdate((e) => {
+      translateY.value = Math.max(0, e.translationY); // bas uniquement
+    })
+    .onEnd((e) => {
+      if (e.translationY > DISMISS_THRESHOLD || e.velocityY > 800) {
+        translateY.value = withTiming(SCREEN_HEIGHT, { duration: 220 }, (done) => {
+          if (done) runOnJS(onClose)();
+        });
+      } else {
+        translateY.value = withSpring(0, { damping: 30, stiffness: 200 });
+      }
+    });
+
+  const contentStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: translateY.value }],
+  }));
+
+  const bgStyle = useAnimatedStyle(() => ({
+    // le fond noir s'estompe à mesure qu'on glisse (1 → ~0.3 sur la distance d'un écran)
+    opacity: Math.max(0.3, 1 - translateY.value / SCREEN_HEIGHT),
+  }));
 
   return (
     <Modal
@@ -55,7 +96,15 @@ export default function ReviewPhotosModal({
       onRequestClose={onClose}
       onShow={handleShow}
     >
-      <SafeAreaView style={styles.safeArea}>
+      {/* GestureHandlerRootView + SafeAreaProvider INTERNES : le Modal est une
+          fenêtre native séparée → ni les gestes ni les insets du root racine ne
+          l'atteignent. Sans ça, la croix se colle sous la barre de statut. */}
+      <GestureHandlerRootView style={styles.fill}>
+        <SafeAreaProvider>
+          <GestureDetector gesture={dismissGesture}>
+            <Animated.View style={[styles.fill, styles.bg, bgStyle]}>
+              <Animated.View style={[styles.fill, contentStyle]}>
+                <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
         {/* Header */}
         <View style={styles.header}>
           <View style={styles.headerSpacer} />
@@ -111,12 +160,23 @@ export default function ReviewPhotosModal({
             ))}
           </View>
         )}
-      </SafeAreaView>
+                </SafeAreaView>
+              </Animated.View>
+            </Animated.View>
+          </GestureDetector>
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  fill: {
+    flex: 1,
+  },
+  bg: {
+    backgroundColor: "#000",
+  },
   safeArea: {
     flex: 1,
     backgroundColor: "#000",
