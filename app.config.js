@@ -23,11 +23,12 @@ const config = {
     },
     android: {
       package: "com.criteat.app",
+      // Icône adaptative basée sur la vraie icône CritEat (pleine/opaque → pas de
+      // raccord de couleur). Les anciens fichiers android-icon-* étaient les
+      // valeurs par défaut du template Expo (chevron bleu) → d'où l'icône Expo.
       adaptiveIcon: {
-        backgroundColor: "#E6F4FE",
-        foregroundImage: "./assets/images/android-icon-foreground.png",
-        backgroundImage: "./assets/images/android-icon-background.png",
-        monochromeImage: "./assets/images/android-icon-monochrome.png",
+        foregroundImage: "./assets/images/icon.png",
+        backgroundColor: "#E8472A",
       },
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
