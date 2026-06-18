@@ -60,3 +60,6 @@ scripts/.env
 # Logs et dumps
 *.log
 crashlog.*
+
+# Documentation locale (non versionnée)
+docs/
